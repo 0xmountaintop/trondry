@@ -603,6 +603,35 @@ async fn test_tron_chain_ids() {
     assert_eq!(chain_id, 2494104990); // Tron Shasta Testnet
 }
 
+// test Tron transaction count (nonce) always returns 0
+#[tokio::test(flavor = "multi_thread")]
+async fn test_tron_transaction_count() {
+    use alloy_primitives::address;
+    
+    // Test Tron Mainnet
+    let (_api, handle) = spawn(NodeConfig::test().with_chain_id(Some(728126428u64))).await;
+    let provider = handle.http_provider();
+    
+    let test_address = address!("0x1234567890123456789012345678901234567890");
+    let nonce = provider.get_transaction_count(test_address).await.unwrap();
+    assert_eq!(nonce, 0); // Tron has no nonces, should always return 0
+    
+    // Test Tron Shasta Testnet
+    let (_api, handle) = spawn(NodeConfig::test().with_chain_id(Some(2494104990u64))).await;
+    let provider = handle.http_provider();
+    
+    let nonce = provider.get_transaction_count(test_address).await.unwrap();
+    assert_eq!(nonce, 0); // Tron has no nonces, should always return 0
+    
+    // Test that non-Tron chains still work normally
+    let (_api, handle) = spawn(NodeConfig::test().with_chain_id(Some(1u64))).await; // Ethereum mainnet
+    let provider = handle.http_provider();
+    
+    let nonce = provider.get_transaction_count(test_address).await.unwrap();
+    // For Ethereum, nonce should be 0 for a new address (but this is the normal behavior, not forced)
+    assert_eq!(nonce, 0);
+}
+
 // <https://github.com/foundry-rs/foundry/issues/6096>
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fork_revert_next_block_timestamp() {

@@ -3199,6 +3199,15 @@ impl EthApi {
         address: Address,
         block_number: Option<BlockId>,
     ) -> Result<u64> {
+        // Check if this is a Tron chain and handle accordingly
+        if let Some(nonce) = crate::eth::tron::TronAdapter::get_transaction_count(
+            address,
+            block_number,
+            self.chain_id(),
+        ) {
+            return Ok(nonce);
+        }
+
         let block_request = self.block_request(block_number).await?;
 
         if let BlockRequest::Number(number) = block_request {

@@ -26,7 +26,7 @@ alwaysApply: false
 
 [X] 2. Tron Chain Configuration
     [X] 2.1 Add `tron-mainnet` & `tron-shasta` variants in chain config crate (chainId, network name).
-    [ ] 2.2 Expose CLI flag/env var to select Tron (`--chain tron`).
+    [X] 2.2 Expose CLI flag/env var to select Tron (`--chain tron`).
 
 [ ] 3. JSON-RPC Compatibility Layer
     [ ] 3.1 Wrap RPC client to intercept/transform requests & responses.

@@ -706,6 +706,25 @@ fn create_default_chains() -> HashMap<String, ChainData> {
         },
     );
 
+    // Tron Networks
+    chains.insert(
+        "tron".to_string(),
+        ChainData {
+            name: "Tron Mainnet".to_string(),
+            chain_id: 728126428,
+            default_rpc_url: "https://api.trongrid.io".to_string(),
+        },
+    );
+
+    chains.insert(
+        "tron_shasta".to_string(),
+        ChainData {
+            name: "Tron Shasta Testnet".to_string(),
+            chain_id: 2494104990,
+            default_rpc_url: "https://api.shasta.trongrid.io".to_string(),
+        },
+    );
+
     chains
 }
 

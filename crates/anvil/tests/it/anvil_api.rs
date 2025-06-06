@@ -587,6 +587,22 @@ async fn test_set_chain_id() {
     assert_eq!(chain_id, 1234);
 }
 
+// test Tron chain ID support
+#[tokio::test(flavor = "multi_thread")]
+async fn test_tron_chain_ids() {
+    // Test Tron Mainnet
+    let (api, handle) = spawn(NodeConfig::test().with_chain_id(Some(728126428u64))).await;
+    let provider = handle.http_provider();
+    let chain_id = provider.get_chain_id().await.unwrap();
+    assert_eq!(chain_id, 728126428); // Tron Mainnet
+
+    // Test Tron Shasta Testnet
+    let (api, handle) = spawn(NodeConfig::test().with_chain_id(Some(2494104990u64))).await;
+    let provider = handle.http_provider();
+    let chain_id = provider.get_chain_id().await.unwrap();
+    assert_eq!(chain_id, 2494104990); // Tron Shasta Testnet
+}
+
 // <https://github.com/foundry-rs/foundry/issues/6096>
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fork_revert_next_block_timestamp() {

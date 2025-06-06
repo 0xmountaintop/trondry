@@ -1,0 +1,67 @@
+---
+description: 
+globs: 
+alwaysApply: true
+---
+# Tron vs Ethereum (TVM vs EVM)
+
+Tron’s Virtual Machine (TVM) is *fundamentally* compatible with Ethereum’s EVM, but with key differences. Notably, Tron replaces Ethereum’s Gas model with an **Energy** model: each transaction consumes *Bandwidth* and *Energy* instead of gas, and opcodes have different energy costs (e.g. lower costs for `SLOAD`, `CALL`). The `GASPRICE` and `BASEFEE` opcodes on Tron return the network’s `energyPrice` instead of fluctuating gas fees. Smart contract addresses on Tron use a “0x41” prefix (e.g. CREATE2 prefixes differ). Standard TRX transfers on Tron bypass a contract’s fallback entirely. These divergences mean Foundry’s Ethereum assumptions (gas fees, address prefixes, fallback behavior, etc.) will not always hold. On the API side, Tron **supports Ethereum-compatible JSON-RPC** 2.0 calls, but only *partially*. In practice, common methods like `eth_getBalance`, `eth_call`, etc. exist, but some Ethereum RPC fields and methods are unsupported or behave differently (see below).
+
+# Foundry’s EVM Assumptions
+
+Foundry’s tools (`forge`, `cast`, `anvil`) assume an Ethereum-like EVM chain via JSON-RPC. It expects standard fields in block payloads (e.g. `stateRoot`, `baseFeePerGas`, non-empty gasprice) and account nonces for transactions. It also assumes an Ethereum gas-based fee model for sending and simulating transactions. Crucially, Foundry uses a local Rust EVM (revm) to simulate chains (via `anvil`) and uses JSON-RPC for external nodes. Tron diverges in all these areas: there is **no account nonce** on Tron, so methods like `eth_getTransactionCount` do not exist. Foundry also expects block data to include a 32-byte `stateRoot`, but Tron’s RPC returns it as empty (“0x”), causing deserialization failures. Other Ethereum methods either return errors or only accept limited parameters – for example, Tron’s `eth_getCode` only supports the `"latest"` tag, not arbitrary block numbers. In short, Foundry’s JSON-RPC client and EVM engine will encounter mismatches when talking to a Tron node without adaptation.
+
+# JSON-RPC Shims and Adapters
+
+To reuse Foundry’s architecture, we can insert a compatibility layer that **adapts Foundry’s Ethereum RPC calls to Tron’s APIs**. Key points:
+
+* **Missing `stateRoot`**: Intercept `eth_getBlockByNumber` (and similar) responses and inject a dummy stateRoot (e.g. `0x…0`) or mark it optional. The issue tracker notes “block payload from the Tron RPC is lacking the `stateRoot` field”, so Foundry must tolerate or fix this.
+* **Nonce (Transaction Count)**: Since Tron has no nonces, trap `eth_getTransactionCount` calls and return a constant (e.g. 0) or ignore them. As one guide explains, “Tron has no concept of NONCE, so no real `eth_getTransactionCount` API”. Foundry’s wallet code would then always send fresh transactions without a nonce.
+* **Address format**: Tron addresses in hex have a leading `0x41`; many Tron APIs expect 20-byte addresses *without* the “41” prefix. The official docs for `eth_call` say both `from` and `to` addresses must **remove** the “41” prefix. Thus the adapter should strip or add “0x41” as needed when Foundry constructs calls or parses results. (Alternatively, use raw 0x-prefixed Ethereum-style addresses that happen to start with 41.)
+* **Unsupported RPC methods/params**: Trap or rewrite Ethereum calls that Tron rejects. For example, `eth_getCode(<address>, <blockNumber>)` fails on Tron unless the block tag is “latest”. The shim could force the tag to “latest” or reject historical queries. Similarly, ignore Ethereum-only methods (e.g. `eth_getProof`, certain trace APIs) or supply stubs.
+* **Unit conversions**: If Foundry reports balances or fees, note that Tron uses “Sun” (1 TRX = 10^6 Sun). (QuickNode docs say Tron JSON-RPC returns balances in Wei by convention, but the adapter should clarify if scaling is needed for Foundry’s UX.)
+  In practice, one could implement a small proxy server or modify Foundry’s RPC client (in Rust) to perform these conversions. For example, before deserializing a block, add `stateRoot: 0x…` if empty; after serializing a transaction to send, call Tron’s gRPC or HTTP broadcast instead of pure eth\_sendRaw.
+
+# Transaction Signing & Deployment
+
+Foundry compiles Solidity (works for TronTVM contracts, since TVM is Solidity-compatible) and signs transactions via ECDSA. However, Tron’s transaction format is different (it includes fields like expiration, and TRX tokens use Sun). Two approaches:
+
+1. **JSON-RPC via Tron-compatible endpoint** – If using TronGrid/Tron full node with Ethereum compatibility, Foundry’s `eth_sendRawTransaction` might broadcast a signed TX. Tron’s docs indicate an `eth_sendRawTransaction` *is* supported for Tron【28†】 (Tatum docs mention it), but it must be a **serialized Tron transaction protobuf**, not an Ethereum RLP. A bridging layer might take Foundry’s EVM-signed tx, repack it as Tron protobuf (using a library) and call `eth_sendRawTransaction`.
+2. **Tron gRPC/HTTP API** – Alternatively, bypass JSON-RPC for send: use a Tron SDK (e.g. a Rust gRPC client like \[7]) to broadcast. Foundry’s `cast send` or `forge send` could be extended to optionally call Tron’s gRPC `broadcastTransaction` with the signed bytes. This would require adding a small Tron SDK dependency or HTTP client to Foundry. This is a pain point but can be minimized by reusing any existing Tron Rust libraries (e.g. [`rust-tron`](mdc:https:/github.com/andelf/rust-tron) or [`tron-api-client`](mdc:https:/crates.io/crates/tron-api-client)).
+
+# Anvil (Local Node) Support
+
+Foundry’s `anvil` (local EVM) can be configured to simulate Tron. We’d want to run an EVM in “Tron mode”:
+
+* **Chain config**: Set chainId=728126428 (Tron Mainnet) or 2494104990 (Shasta). Set gasLimits or baseFee to mimic Tron defaults (e.g. baseFee = energyPrice).
+* **Gas/Energy**: We could simply map gas to Tron-energy one-to-one for simplicity, or mark all transactions as using 0 gas + needed energy (Tron often gives free Bandwidth). Possibly configure anvil to ignore gas limits.
+* **State**: Pre-fund test accounts with TRX (via anvil’s genesis alloc).
+* **OpCode behavior**: Since revm implements Ethereum opcodes, most TVM differences are minor (DIFFICULTY and GASLIMIT opcodes can just return 0). Create2 uses the same keccak formula but Tron’s resulting address will have 0x41 prefix; we might live with that since addresses in anvil are raw bytes anyway. The fallback vs transfer behavior is not easily changed in revm.
+  In essence, for pure contract testing and debugging, anvil can “pretend” to be Tron by using Tron chain constants. Anvil’s RPC can be extended (via code changes) to return `chainId` and `networkId` consistent with Tron, and to permit only `"latest"` queries as above. This allows `forge test` to run against a Tron-like local chain for debugging.
+
+# Debugging and Scripting Pain Points
+
+Foundry’s debugger (via `forge test --debug` or `forge inspect`) will work on the local anvil chain, but not on a live Tron node (no debug-trace RPC). Rely on local simulation. Scripts (`cast`) that query the chain via RPC must handle Tron’s idiosyncrasies: for example, `cast call` or `cast balance` will work if we route to a Tron-compatible JSON-RPC endpoint, but `cast send` needs the above transaction shim. Contract logs, events, and reverts should behave normally since TVM is EVM-compatible. However, one must be careful with address formats in scripts (use hex addresses, not Base58).
+Also note that Forking (“`anvil --fork-url`”) is currently **hard or impossible** on Tron. The Tron RPC cannot provide historical stateRoot or nonces, and will refuse most block-tag queries except `latest`. Until Tron adds full archive state (e.g. an “archive node” feature) or a parity-like state trie, Foundry’s block forking will fail. One could only fork the latest state (if at all) by using an archive source that *does* supply stateRoot, but this is beyond a “minimal patch.” In practice, forking Tron is out of reach with current nodes; emphasize testing on local anvil instead.
+
+# Infrastructure Providers
+
+For RPC, **TronGrid** is the natural “Infura-equivalent” for Tron. It offers FullNode HTTP and gRPC APIs for Mainnet and Shasta. Example endpoints: `https://api.trongrid.io` (Mainnet) or `https://api.shasta.trongrid.io` (Shasta). These endpoints can speak Ethereum-compatible JSON-RPC (when enabled) and Tron’s own REST/gRPC. QuickNode and Ankr also offer Tron RPC services, but TronGrid is official and free for basic usage. As an alternative, one can run a **Tron Full Node** locally: configure `java-tron` with JSON-RPC enabled (in `config.conf`) on port 50545. A full node gives complete control and no rate limits, but requires disk/CPU. (If using JSON-RPC from a full node, remember to turn on `httpFullNodeEnable = true` in settings.) In summary, recommend using TronGrid or a similar RPC service (with API key) in Foundry’s RPC URL (`--fork-url` or environment).
+
+# Third-Party SDKs and Tools
+
+To bridge any remaining gaps, Tron-specific SDKs can help. For Rust integration, libraries like [`tron-api-client`](mdc:https:/crates.io/crates/tron-api-client) or [`rust-tron`](mdc:https:/github.com/andelf/rust-tron) provide gRPC/HTTP clients for Tron. These could be used inside Foundry’s code to call Tron RPCs more flexibly (e.g. broadcasting a transaction via gRPC). For scripting outside Foundry, the popular TronWeb (JavaScript) or TronPy (Python) exist, but they’d be auxiliary to Foundry itself. If deep integration is needed, one could even reuse parts of \[7]’s wallet client or a similar lib to sign or broadcast transactions. However, for a “minimal patch,” it’s better to stick with Foundry’s own signing and just adapt the output.
+
+# Implementation Roadmap
+
+1. **Chain Configuration:** Add Tron network definitions in Foundry (chainId, name). Ensure `forge config` or CLI flags can select Tron (e.g. `--chain tron`).
+2. **RPC Compatibility Layer:** Modify Foundry’s RPC client (in Rust) to detect Tron endpoints. Implement a shim that: (a) strips/handles the `0x41` prefix on addresses; (b) intercepts `eth_getBlockByNumber` to insert a dummy `stateRoot` if missing; (c) intercepts `eth_getTransactionCount` and returns 0 (or reinterprets a Tron account query); (d) forces any block-tag parameter to `"latest"` if Tron rejects numeric tags; (e) handles or ignores calls to unsupported methods. This might involve extending the JSON-RPC parsing/deserialization (e.g. making `stateRoot` an optional field in Foundry’s block type).
+3. **Transaction Adapter:** When Foundry calls `eth_sendRawTransaction`, ensure the payload is a **Tron-formatted** signed TX. This could be done by adding a conversion: take the Ethereum-style RLP and either re-encode as Tron protobuf (via a Rust library) before broadcasting, or call a Tron RPC (like `broadcastTransaction`) directly. For a minimal hack, one could call the JSON-RPC `eth_sendRawTransaction` on TronGrid and let it handle the data (TronGrid may expect the proper format). Rigorous solution: link a Tron SDK.
+4. **Anvil (Local VM) Mode:** Extend `anvil` to have a “tron” chain preset: set chain ID, block gas limits, etc. In code, add a new `BlockchainConfig` for Tron (similar to Ethereum mainnet). Adjust revm’s chain logic if needed (or simply trust defaults). Test that `forge test` using `--fork-url` pointing to local anvil (or even without forking) runs with a Tron-like environment. Pre-allocate some TRX (as Ether) in genesis for test accounts.
+5. **Testing & Debugging:** Write sample Tron contracts (e.g. a TRC-20 token) and try `forge test` and `forge run` against both a local anvil chain and a Shasta node. Debug issues like fallback behavior or gas calculations. Use `forge debug` on local runs to step through code.
+6. **Documentation & Scripts:** Update Foundry docs or scripts to explain using Tron: how to set `chainId`, which RPC URLs to use (TronGrid), how to convert addresses. Possibly add CLI options like `--tron` that automatically choose Tron settings.
+7. **Limitations:** Note that full forking is not currently feasible – only “latest” state can be used, and no account nonces or history queries work. Explain these limitations to users.
+
+By adapting the JSON-RPC layer and configuration, we reuse almost all of Foundry’s logic (compiling, testing, EVM simulation) with minimal new code. Tron’s EVM compatibility means Foundry’s opcodes and solc support work out-of-the-box; we only patch around the API and resource-model mismatches. Citations above document the main differences and issues to address in this integration. Together, these steps form a roadmap to get Foundry talking to Tron networks without rewriting the core.
+
+**Sources:** Official Tron docs and developer discussions.

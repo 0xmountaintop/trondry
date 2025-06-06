@@ -1,3 +1,13 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Scratchpad
+
+## Current Task: Adapting Foundry to Support Tron Network (Minimal Modifications)
+
+### High-Level Goals
 # Scratchpad
 
 ## Current Task: Adapting Foundry to Support Tron Network (Minimal Modifications)
@@ -9,13 +19,13 @@
 
 ### TODO
 
-[ ] 1. Familiarization & Architecture Review
-    [ ] 1.1 Survey Foundry crates interacting with JSON-RPC (`cast`, `forge`, `anvil` HTTP server).
-    [ ] 1.2 Locate serialization types that assume Ethereum-specific fields (e.g. `stateRoot`, `nonce`).
-    [ ] 1.3 Identify transaction signing & broadcast flow.
+[X] 1. Familiarization & Architecture Review
+    [X] 1.1 Survey Foundry crates interacting with JSON-RPC (`cast`, `forge`, `anvil` HTTP server).
+    [X] 1.2 Locate serialization types that assume Ethereum-specific fields (e.g. `stateRoot`, `nonce`).
+    [X] 1.3 Identify transaction signing & broadcast flow.
 
-[ ] 2. Tron Chain Configuration
-    [ ] 2.1 Add `tron-mainnet` & `tron-shasta` variants in chain config crate (chainId, network name).
+[X] 2. Tron Chain Configuration
+    [X] 2.1 Add `tron-mainnet` & `tron-shasta` variants in chain config crate (chainId, network name).
     [ ] 2.2 Expose CLI flag/env var to select Tron (`--chain tron`).
 
 [ ] 3. JSON-RPC Compatibility Layer
@@ -54,6 +64,30 @@
     [ ] 8.2 Solicit community feedback.
 
 ---
+
+## Architecture Review Findings
+
+### JSON-RPC Client Architecture
+- **Anvil**: `crates/anvil/src/eth/api.rs` - Main EthApi implementation with all RPC handlers
+- **Cast**: Uses `alloy_provider::Provider` for RPC calls, see `crates/cast/src/lib.rs`
+- **Common**: `foundry_common::provider::ProviderBuilder` used across tools
+
+### Key RPC Methods to Adapt
+- `eth_getBlockByNumber` - needs `stateRoot` injection
+- `eth_getTransactionCount` - needs nonce stub for Tron
+- `eth_sendRawTransaction` - needs Tron protobuf support
+- Block/transaction serialization in `alloy_rpc_types`
+
+### Transaction Flow
+- **Signing**: `crates/anvil/src/eth/api.rs:sign_request()` 
+- **Broadcasting**: `send_raw_transaction()` in same file
+- **Script Broadcasting**: `crates/script/src/broadcast.rs`
+- **Cast Send**: `crates/cast/src/cmd/send.rs`
+
+### Chain Configuration
+- **Anvil Config**: `crates/anvil/src/config.rs` - CHAIN_ID constant, NodeConfig
+- **Cheatcodes**: `crates/cheatcodes/src/config.rs` - create_default_chains()
+- **Common**: Chain enum and configuration spread across multiple crates
 
 ## Lessons
 (Keep this updated with recurring fixes & best practices)

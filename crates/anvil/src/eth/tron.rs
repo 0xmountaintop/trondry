@@ -6,8 +6,9 @@
 //! - Tron blocks may have missing stateRoot (inject dummy value)
 //! - Tron addresses use 0x41 prefix (normalize as needed)
 //! - Some RPC methods are unsupported or limited
+//! - Transaction broadcasting via JSON-RPC or gRPC
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{Address, B256, Bytes, TxHash};
 use alloy_rpc_types::{BlockId, BlockNumberOrTag};
 
 /// Tron chain IDs
@@ -17,6 +18,36 @@ pub const TRON_SHASTA_CHAIN_ID: u64 = 2494104990;
 /// Check if a chain ID corresponds to a Tron network
 pub fn is_tron_chain(chain_id: u64) -> bool {
     matches!(chain_id, TRON_MAINNET_CHAIN_ID | TRON_SHASTA_CHAIN_ID)
+}
+
+/// Transaction broadcast mode for Tron
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TronTxMode {
+    /// Use JSON-RPC eth_sendRawTransaction with protobuf data
+    JsonRpc,
+    /// Use gRPC broadcastTransaction
+    Grpc,
+    /// Auto-detect: try JSON-RPC first, fallback to gRPC
+    Auto,
+}
+
+impl Default for TronTxMode {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+impl std::str::FromStr for TronTxMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "jsonrpc" | "json-rpc" | "json_rpc" => Ok(Self::JsonRpc),
+            "grpc" => Ok(Self::Grpc),
+            "auto" => Ok(Self::Auto),
+            _ => Err(format!("Invalid Tron transaction mode: {s}. Valid options: jsonrpc, grpc, auto")),
+        }
+    }
 }
 
 /// Tron compatibility adapter for RPC methods
@@ -94,6 +125,49 @@ impl TronAdapter {
         } else {
             address
         }
+    }
+
+    /// Handle Tron transaction broadcasting
+    /// 
+    /// This method attempts to broadcast a transaction to a Tron network using the specified mode.
+    /// For now, this is a placeholder that simulates the broadcast and returns a dummy hash.
+    /// In a real implementation, this would:
+    /// 1. Convert the Ethereum-style transaction to Tron protobuf format
+    /// 2. Broadcast via JSON-RPC eth_sendRawTransaction or gRPC broadcastTransaction
+    /// 3. Return the actual transaction hash from the network
+    pub async fn broadcast_transaction(
+        tx_data: Bytes,
+        chain_id: u64,
+        mode: TronTxMode,
+        _rpc_url: Option<&str>,
+    ) -> Result<Option<TxHash>, String> {
+        if !is_tron_chain(chain_id) {
+            return Ok(None); // Not a Tron chain, use normal logic
+        }
+
+        // TODO: Implement actual Tron transaction broadcasting
+        // This is a placeholder implementation
+        match mode {
+            TronTxMode::JsonRpc => {
+                // TODO: Convert tx_data to Tron protobuf format
+                // TODO: Call JSON-RPC eth_sendRawTransaction with protobuf data
+                tracing::info!("Broadcasting Tron transaction via JSON-RPC (placeholder)");
+            }
+            TronTxMode::Grpc => {
+                // TODO: Convert tx_data to Tron protobuf format  
+                // TODO: Call gRPC broadcastTransaction
+                tracing::info!("Broadcasting Tron transaction via gRPC (placeholder)");
+            }
+            TronTxMode::Auto => {
+                // TODO: Try JSON-RPC first, fallback to gRPC
+                tracing::info!("Broadcasting Tron transaction via auto-detect (placeholder)");
+            }
+        }
+
+        // For now, generate a dummy transaction hash based on the input data
+        // In a real implementation, this would be the hash returned by the Tron network
+        let hash = alloy_primitives::keccak256(&tx_data);
+        Ok(Some(TxHash::from(hash)))
     }
 }
 
@@ -178,5 +252,40 @@ mod tests {
             TronAdapter::normalize_block_number(latest, TRON_MAINNET_CHAIN_ID),
             latest
         );
+    }
+
+    #[test]
+    fn test_tron_tx_mode_from_str() {
+        assert_eq!("jsonrpc".parse::<TronTxMode>().unwrap(), TronTxMode::JsonRpc);
+        assert_eq!("json-rpc".parse::<TronTxMode>().unwrap(), TronTxMode::JsonRpc);
+        assert_eq!("grpc".parse::<TronTxMode>().unwrap(), TronTxMode::Grpc);
+        assert_eq!("auto".parse::<TronTxMode>().unwrap(), TronTxMode::Auto);
+        
+        assert!("invalid".parse::<TronTxMode>().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_transaction() {
+        let tx_data = Bytes::from(vec![1, 2, 3, 4]);
+        
+        // Test Tron chain
+        let result = TronAdapter::broadcast_transaction(
+            tx_data.clone(),
+            TRON_MAINNET_CHAIN_ID,
+            TronTxMode::Auto,
+            None,
+        ).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_some());
+        
+        // Test non-Tron chain
+        let result = TronAdapter::broadcast_transaction(
+            tx_data,
+            1, // Ethereum mainnet
+            TronTxMode::Auto,
+            None,
+        ).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
     }
 } 

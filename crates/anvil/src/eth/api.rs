@@ -1073,6 +1073,16 @@ impl EthApi {
             return Err(BlockchainError::EmptyRawTransactionData);
         }
 
+        // Check if this is a Tron chain and handle accordingly
+        if let Ok(Some(tx_hash)) = crate::eth::tron::TronAdapter::broadcast_transaction(
+            tx.clone(),
+            self.chain_id(),
+            crate::eth::tron::TronTxMode::Auto,
+            None, // TODO: Pass RPC URL when available
+        ).await {
+            return Ok(tx_hash);
+        }
+
         let transaction = TypedTransaction::decode_2718(&mut data)
             .map_err(|_| BlockchainError::FailedToDecodeSignedTransaction)?;
 

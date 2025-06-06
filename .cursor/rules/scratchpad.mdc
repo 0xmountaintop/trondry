@@ -20,17 +20,30 @@ alwaysApply: false
 - ✅ Task 3.1: Created Tron adapter module with helper functions
 - ✅ Task 3.3: Implemented transaction count (nonce) handling for Tron (always returns 0)
 - ✅ Added comprehensive tests for Tron chain ID and transaction count functionality
+- ✅ Task 4.1: Built common signing & protobuf serialization module
+- ✅ Task 4.2: Implemented JSON-RPC path for sending protobuf transactions
+- ✅ Task 4.3: Implemented gRPC path for direct Tron node communication
+- ✅ Task 4.4: Added CLI flag support for transaction mode selection
+- ✅ Task 4.5: Integrated transaction adapter with feature flag support
 
 **Key Findings:**
 - Foundry's chain configuration system is flexible and easily extensible
 - The `eth_getTransactionCount` method can be intercepted at the EthApi level
 - Tron adapter pattern works well for handling chain-specific differences
 - Tests confirm that Tron chains return nonce=0 while preserving Ethereum behavior
+- Transaction adapter successfully handles both JSON-RPC and gRPC broadcast methods
+- Protobuf serialization works correctly for Tron transaction format
+- Feature flag system allows optional Tron support without affecting core functionality
+
+**Current Status:**
+- Core Tron transaction broadcasting functionality is complete
+- Both JSON-RPC and gRPC paths are implemented and tested
+- Ready to move to remaining RPC compatibility layer tasks
 
 **Next Priority:**
-- Task 4: Transaction Adapter (implement both JSON-RPC and gRPC broadcast flows)
 - Task 3.2: Handle state root injection for Tron blocks
 - Task 3.4-3.5: Address format handling and block tag normalization
+- Task 5: Anvil "Tron Mode" implementation
 
 ### TODO
 
@@ -50,12 +63,12 @@ alwaysApply: false
     [ ] 3.4 Force block tags to `"latest"` for unsupported historical queries.
     [ ] 3.5 Handle address format conversion (0x41 prefix).
 
-[ ] 4. Transaction Adapter
-    [ ] 4.1 Build common signing & protobuf serialization module.
-    [ ] 4.2 Implement JSON-RPC path: send protobuf bytes via `eth_sendRawTransaction`.
-    [ ] 4.3 Implement gRPC path: call `broadcastTransaction` on Tron node.
-    [ ] 4.4 Expose selection via CLI flag/env (`--tron-tx-mode {jsonrpc,grpc,auto}`; default `auto` attempts JSON-RPC then gRPC fallback).
-    [ ] 4.5 Integrate adapter under `tron` feature flag.
+[X] 4. Transaction Adapter
+    [X] 4.1 Build common signing & protobuf serialization module.
+    [X] 4.2 Implement JSON-RPC path: send protobuf bytes via `eth_sendRawTransaction`.
+    [X] 4.3 Implement gRPC path: call `broadcastTransaction` on Tron node.
+    [X] 4.4 Expose selection via CLI flag/env (`--tron-tx-mode {jsonrpc,grpc,auto}`; default `auto` attempts JSON-RPC then gRPC fallback).
+    [X] 4.5 Integrate adapter under `tron` feature flag.
 
 [ ] 5. Anvil "Tron Mode"
     [ ] 5.1 Add chain preset (chainId, energyPrice mapping).

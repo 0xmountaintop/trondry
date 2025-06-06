@@ -632,6 +632,34 @@ async fn test_tron_transaction_count() {
     assert_eq!(nonce, 0);
 }
 
+// test Tron transaction broadcasting
+#[tokio::test(flavor = "multi_thread")]
+async fn test_tron_transaction_broadcasting() {
+    use alloy_primitives::Bytes;
+    
+    // Test Tron Mainnet
+    let (api, _handle) = spawn(NodeConfig::test().with_chain_id(Some(728126428u64))).await;
+    
+    // Create some dummy transaction data
+    let tx_data = Bytes::from(vec![0x01, 0x02, 0x03, 0x04]);
+    
+    // Test that Tron transaction broadcasting returns a hash (placeholder implementation)
+    let result = api.send_raw_transaction(tx_data.clone()).await;
+    assert!(result.is_ok(), "Tron transaction broadcasting should succeed");
+    
+    let tx_hash = result.unwrap();
+    assert_ne!(tx_hash, alloy_primitives::TxHash::ZERO, "Should return a non-zero transaction hash");
+    
+    // Test Tron Shasta Testnet
+    let (api, _handle) = spawn(NodeConfig::test().with_chain_id(Some(2494104990u64))).await;
+    
+    let result = api.send_raw_transaction(tx_data).await;
+    assert!(result.is_ok(), "Tron Shasta transaction broadcasting should succeed");
+    
+    let tx_hash = result.unwrap();
+    assert_ne!(tx_hash, alloy_primitives::TxHash::ZERO, "Should return a non-zero transaction hash");
+}
+
 // <https://github.com/foundry-rs/foundry/issues/6096>
 #[tokio::test(flavor = "multi_thread")]
 async fn test_fork_revert_next_block_timestamp() {

@@ -18,6 +18,7 @@ alwaysApply: false
 - ✅ Task 1: Familiarization & Architecture Review
 - ✅ Task 2: Tron Chain Configuration (added Tron mainnet & Shasta to chain configs)
 - ✅ Task 3.1: Created Tron adapter module with helper functions
+- ✅ Task 3.2: Implemented state root injection for Tron blocks (dummy value when missing)
 - ✅ Task 3.3: Implemented transaction count (nonce) handling for Tron (always returns 0)
 - ✅ Added comprehensive tests for Tron chain ID and transaction count functionality
 - ✅ Task 4.1: Built common signing & protobuf serialization module
@@ -34,6 +35,8 @@ alwaysApply: false
 - Transaction adapter successfully handles both JSON-RPC and gRPC broadcast methods
 - Protobuf serialization works correctly for Tron transaction format
 - Feature flag system allows optional Tron support without affecting core functionality
+- State root injection works seamlessly in the `convert_block` method for Tron chains
+- Block conversion preserves existing state roots and only injects dummy values when missing
 
 **Current Status:**
 - Core Tron transaction broadcasting functionality is complete
@@ -41,7 +44,6 @@ alwaysApply: false
 - Ready to move to remaining RPC compatibility layer tasks
 
 **Next Priority:**
-- Task 3.2: Handle state root injection for Tron blocks
 - Task 3.4-3.5: Address format handling and block tag normalization
 - Task 5: Anvil "Tron Mode" implementation
 
@@ -58,7 +60,7 @@ alwaysApply: false
 
 [ ] 3. JSON-RPC Compatibility Layer
     [X] 3.1 Create Tron adapter module with helper functions.
-    [ ] 3.2 Inject dummy `stateRoot` for Tron blocks if missing.
+    [X] 3.2 Inject dummy `stateRoot` for Tron blocks if missing.
     [X] 3.3 Return constant `0x0` for `eth_getTransactionCount`.
     [ ] 3.4 Force block tags to `"latest"` for unsupported historical queries.
     [ ] 3.5 Handle address format conversion (0x41 prefix).

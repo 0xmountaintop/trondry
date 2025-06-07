@@ -24,6 +24,7 @@ use crate::{
         macros::node_info,
         pool::transactions::PoolTransaction,
         sign::build_typed_transaction,
+        tron::TronAdapter,
         util::get_precompiles_for,
     },
     inject_precompiles,
@@ -2240,7 +2241,11 @@ impl Backend {
     pub fn convert_block(&self, block: Block) -> AnyRpcBlock {
         let size = U256::from(alloy_rlp::encode(&block).len() as u32);
 
-        let Block { header, transactions, .. } = block;
+        let Block { mut header, transactions, .. } = block;
+
+        // Apply Tron-specific adaptations to the header
+        let chain_id = self.env.read().evm_env.cfg_env.chain_id;
+        header.state_root = TronAdapter::ensure_state_root(header.state_root, chain_id);
 
         let hash = header.hash_slow();
         let Header { number, withdrawals_root, .. } = header;
@@ -3383,5 +3388,196 @@ pub fn op_haltreason_to_instruction_result(op_reason: OpHaltReason) -> Instructi
     match op_reason {
         OpHaltReason::Base(eth_h) => eth_h.into(),
         OpHaltReason::FailedDeposit => InstructionResult::Stop,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::eth::tron::{TRON_MAINNET_CHAIN_ID, TRON_SHASTA_CHAIN_ID};
+
+    #[test]
+    fn test_tron_state_root_injection() {
+        // Create a simple block with zero state root (simulating Tron's missing state root)
+        let header = Header {
+            state_root: B256::ZERO, // This simulates Tron's missing state root
+            number: 1,
+            gas_limit: 8000000,
+            gas_used: 21000,
+            timestamp: 1234567890,
+            beneficiary: Address::ZERO,
+            ..Default::default()
+        };
+
+        let block = Block {
+            header,
+            transactions: vec![],
+            ommers: vec![],
+        };
+
+        // Create a minimal environment with Tron chain ID
+        let env = Arc::new(RwLock::new(Env::default()));
+        {
+            let mut env_guard = env.write();
+            env_guard.evm_env.cfg_env.chain_id = TRON_MAINNET_CHAIN_ID;
+        }
+
+        // Create a minimal backend for testing
+        let env_clone = env.clone();
+        let backend = Backend {
+            db: Arc::new(AsyncRwLock::new(Box::new(crate::mem::in_memory_db::MemDb::default()) as Box<dyn Db>)),
+            blockchain: Blockchain::new(&env.read(), SpecId::CANCUN, Some(1000000000), 1234567890, 0),
+            states: Arc::new(RwLock::new(InMemoryBlockStates::default())),
+            env: env_clone,
+            fork: Arc::new(RwLock::new(None)),
+            time: TimeManager::new(1234567890),
+            cheats: CheatsManager::default(),
+            fees: FeeManager::new(SpecId::CANCUN, 1000000000, false, 1000000000, BlobExcessGasAndPrice::new(0, false)),
+            genesis: GenesisConfig::default(),
+            new_block_listeners: Arc::new(Mutex::new(Vec::new())),
+            active_state_snapshots: Arc::new(Mutex::new(HashMap::default())),
+            enable_steps_tracing: false,
+            print_logs: false,
+            print_traces: false,
+            odyssey: false,
+            prune_state_history_config: PruneStateHistoryConfig::default(),
+            transaction_block_keeper: None,
+            node_config: Arc::new(AsyncRwLock::new(NodeConfig::default())),
+            slots_in_an_epoch: 32,
+            precompile_factory: None,
+            mining: Arc::new(tokio::sync::Mutex::new(())),
+            capabilities: Arc::new(RwLock::new(WalletCapabilities::default())),
+            executor_wallet: Arc::new(RwLock::new(None)),
+        };
+
+        // Convert the block using the backend
+        let rpc_block = backend.convert_block(block);
+
+        // Verify that the state root was injected with the dummy value
+        let expected_dummy_root = B256::from([0x01; 32]);
+        assert_eq!(rpc_block.header.state_root, expected_dummy_root);
+    }
+
+    #[test]
+    fn test_ethereum_state_root_unchanged() {
+        // Create a simple block with zero state root
+        let header = Header {
+            state_root: B256::ZERO,
+            number: 1,
+            gas_limit: 8000000,
+            gas_used: 21000,
+            timestamp: 1234567890,
+            beneficiary: Address::ZERO,
+            ..Default::default()
+        };
+
+        let block = Block {
+            header,
+            transactions: vec![],
+            ommers: vec![],
+        };
+
+        // Create a minimal environment with Ethereum chain ID
+        let env = Arc::new(RwLock::new(Env::default()));
+        {
+            let mut env_guard = env.write();
+            env_guard.evm_env.cfg_env.chain_id = 1; // Ethereum mainnet
+        }
+
+        // Create a minimal backend for testing
+        let env_clone = env.clone();
+        let backend = Backend {
+            db: Arc::new(AsyncRwLock::new(Box::new(crate::mem::in_memory_db::MemDb::default()) as Box<dyn Db>)),
+            blockchain: Blockchain::new(&env.read(), SpecId::CANCUN, Some(1000000000), 1234567890, 0),
+            states: Arc::new(RwLock::new(InMemoryBlockStates::default())),
+            env: env_clone,
+            fork: Arc::new(RwLock::new(None)),
+            time: TimeManager::new(1234567890),
+            cheats: CheatsManager::default(),
+            fees: FeeManager::new(SpecId::CANCUN, 1000000000, false, 1000000000, BlobExcessGasAndPrice::new(0, false)),
+            genesis: GenesisConfig::default(),
+            new_block_listeners: Arc::new(Mutex::new(Vec::new())),
+            active_state_snapshots: Arc::new(Mutex::new(HashMap::default())),
+            enable_steps_tracing: false,
+            print_logs: false,
+            print_traces: false,
+            odyssey: false,
+            prune_state_history_config: PruneStateHistoryConfig::default(),
+            transaction_block_keeper: None,
+            node_config: Arc::new(AsyncRwLock::new(NodeConfig::default())),
+            slots_in_an_epoch: 32,
+            precompile_factory: None,
+            mining: Arc::new(tokio::sync::Mutex::new(())),
+            capabilities: Arc::new(RwLock::new(WalletCapabilities::default())),
+            executor_wallet: Arc::new(RwLock::new(None)),
+        };
+
+        // Convert the block using the backend
+        let rpc_block = backend.convert_block(block);
+
+        // Verify that the state root remains zero for Ethereum chains
+        assert_eq!(rpc_block.header.state_root, B256::ZERO);
+    }
+
+    #[test]
+    fn test_tron_existing_state_root_preserved() {
+        // Create a simple block with existing state root
+        let existing_state_root = B256::from([0x42; 32]);
+        let header = Header {
+            state_root: existing_state_root,
+            number: 1,
+            gas_limit: 8000000,
+            gas_used: 21000,
+            timestamp: 1234567890,
+            beneficiary: Address::ZERO,
+            ..Default::default()
+        };
+
+        let block = Block {
+            header,
+            transactions: vec![],
+            ommers: vec![],
+        };
+
+        // Create a minimal environment with Tron chain ID
+        let env = Arc::new(RwLock::new(Env::default()));
+        {
+            let mut env_guard = env.write();
+            env_guard.evm_env.cfg_env.chain_id = TRON_SHASTA_CHAIN_ID;
+        }
+
+        // Create a minimal backend for testing
+        let env_clone = env.clone();
+        let backend = Backend {
+            db: Arc::new(AsyncRwLock::new(Box::new(crate::mem::in_memory_db::MemDb::default()) as Box<dyn Db>)),
+            blockchain: Blockchain::new(&env.read(), SpecId::CANCUN, Some(1000000000), 1234567890, 0),
+            states: Arc::new(RwLock::new(InMemoryBlockStates::default())),
+            env: env_clone,
+            fork: Arc::new(RwLock::new(None)),
+            time: TimeManager::new(1234567890),
+            cheats: CheatsManager::default(),
+            fees: FeeManager::new(SpecId::CANCUN, 1000000000, false, 1000000000, BlobExcessGasAndPrice::new(0, false)),
+            genesis: GenesisConfig::default(),
+            new_block_listeners: Arc::new(Mutex::new(Vec::new())),
+            active_state_snapshots: Arc::new(Mutex::new(HashMap::default())),
+            enable_steps_tracing: false,
+            print_logs: false,
+            print_traces: false,
+            odyssey: false,
+            prune_state_history_config: PruneStateHistoryConfig::default(),
+            transaction_block_keeper: None,
+            node_config: Arc::new(AsyncRwLock::new(NodeConfig::default())),
+            slots_in_an_epoch: 32,
+            precompile_factory: None,
+            mining: Arc::new(tokio::sync::Mutex::new(())),
+            capabilities: Arc::new(RwLock::new(WalletCapabilities::default())),
+            executor_wallet: Arc::new(RwLock::new(None)),
+        };
+
+        // Convert the block using the backend
+        let rpc_block = backend.convert_block(block);
+
+        // Verify that the existing state root is preserved for Tron chains
+        assert_eq!(rpc_block.header.state_root, existing_state_root);
     }
 }

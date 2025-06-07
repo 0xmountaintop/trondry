@@ -1023,6 +1023,9 @@ impl NodeConfig {
     ///
     /// *Note*: only memory based backend for now
     pub(crate) async fn setup(&mut self) -> Result<mem::Backend> {
+        // Apply Tron chain preset if this is a Tron network
+        crate::eth::tron::TronAdapter::apply_tron_preset_to_config(self);
+        
         // configure the revm environment
 
         let mut cfg = CfgEnv::default();

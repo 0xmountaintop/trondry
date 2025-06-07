@@ -8,7 +8,7 @@
 //! - Some RPC methods are unsupported or limited
 //! - Transaction broadcasting via JSON-RPC or gRPC
 
-use alloy_primitives::{Address, B256, Bytes, TxHash};
+use alloy_primitives::{Address, B256, Bytes, TxHash, U256};
 use alloy_rpc_types::{BlockId, BlockNumberOrTag};
 
 /// Tron chain IDs
@@ -170,6 +170,119 @@ impl TronAdapter {
         let hash = alloy_primitives::keccak256(&tx_data);
         Ok(Some(TxHash::from(hash)))
     }
+
+    /// Get Tron-specific chain configuration presets
+    /// 
+    /// This provides default values for Tron networks that differ from Ethereum:
+    /// - Energy price mapping (Tron uses energy instead of gas)
+    /// - Default gas limits appropriate for Tron
+    /// - Base fee settings
+    pub fn get_tron_chain_preset(chain_id: u64) -> Option<TronChainPreset> {
+        match chain_id {
+            TRON_MAINNET_CHAIN_ID => Some(TronChainPreset {
+                chain_id: TRON_MAINNET_CHAIN_ID,
+                name: "Tron Mainnet".to_string(),
+                energy_price: 420, // Default energy price in Sun (1 TRX = 1,000,000 Sun)
+                gas_limit: 50_000_000, // Higher gas limit for Tron
+                base_fee: 0, // Tron doesn't use base fee like Ethereum
+                genesis_balance_trx: 10_000, // Default balance in TRX
+            }),
+            TRON_SHASTA_CHAIN_ID => Some(TronChainPreset {
+                chain_id: TRON_SHASTA_CHAIN_ID,
+                name: "Tron Shasta Testnet".to_string(),
+                energy_price: 420,
+                gas_limit: 50_000_000,
+                base_fee: 0,
+                genesis_balance_trx: 10_000,
+            }),
+            _ => None,
+        }
+    }
+
+    /// Convert gas to energy for Tron (1:1 mapping for simplicity)
+    pub fn gas_to_energy(gas: u64) -> u64 {
+        gas
+    }
+
+    /// Convert energy to gas for Tron (1:1 mapping for simplicity)
+    pub fn energy_to_gas(energy: u64) -> u64 {
+        energy
+    }
+
+    /// Convert TRX to Sun (1 TRX = 1,000,000 Sun)
+    pub fn trx_to_sun(trx: u64) -> u64 {
+        trx.saturating_mul(1_000_000)
+    }
+
+    /// Convert Sun to TRX (1,000,000 Sun = 1 TRX)
+    pub fn sun_to_trx(sun: u64) -> u64 {
+        sun / 1_000_000
+    }
+
+    /// Apply Tron chain preset to NodeConfig if it's a Tron chain
+    /// 
+    /// This configures the node with Tron-specific defaults:
+    /// - Sets appropriate gas limits and energy prices
+    /// - Configures TRX balances for genesis accounts
+    /// - Relaxes gas checks for Tron's energy model
+    pub fn apply_tron_preset_to_config(config: &mut crate::NodeConfig) {
+        let chain_id = config.get_chain_id();
+        
+        if let Some(preset) = Self::get_tron_chain_preset(chain_id) {
+            // Apply Tron-specific gas limit if not already set
+            if config.gas_limit.is_none() {
+                config.gas_limit = Some(preset.gas_limit);
+            }
+            
+            // Apply Tron-specific gas price (energy price) if not already set
+            if config.gas_price.is_none() {
+                config.gas_price = Some(preset.energy_price);
+            }
+            
+            // Apply Tron-specific base fee if not already set
+            if config.base_fee.is_none() {
+                config.base_fee = Some(preset.base_fee);
+            }
+            
+            // Convert TRX genesis balance to Sun (Wei equivalent)
+            // Only apply if using default balance
+            let default_eth_balance = alloy_primitives::utils::Unit::ETHER.wei().saturating_mul(U256::from(100u64));
+            if config.genesis_balance == default_eth_balance {
+                let trx_in_sun = Self::trx_to_sun(preset.genesis_balance_trx);
+                config.genesis_balance = U256::from(trx_in_sun);
+            }
+            
+            // Disable block gas limit enforcement for Tron's energy model
+            // This allows more flexible energy usage patterns
+            config.disable_block_gas_limit = true;
+            
+            tracing::info!(
+                "Applied Tron preset for {}: gas_limit={}, energy_price={}, base_fee={}, genesis_balance_trx={}",
+                preset.name,
+                preset.gas_limit,
+                preset.energy_price,
+                preset.base_fee,
+                preset.genesis_balance_trx
+            );
+        }
+    }
+}
+
+/// Tron chain configuration preset
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TronChainPreset {
+    /// Chain ID
+    pub chain_id: u64,
+    /// Human-readable chain name
+    pub name: String,
+    /// Energy price in Sun (Tron's equivalent of gas price)
+    pub energy_price: u128,
+    /// Default gas limit for blocks
+    pub gas_limit: u64,
+    /// Base fee (typically 0 for Tron)
+    pub base_fee: u64,
+    /// Default genesis balance in TRX
+    pub genesis_balance_trx: u64,
 }
 
 #[cfg(test)]
@@ -311,6 +424,83 @@ mod tests {
         assert_eq!(TronAdapter::add_tron_prefix(tron_addr), tron_addr);
     }
 
+    #[test]
+    fn test_tron_chain_presets() {
+        // Test Tron mainnet preset
+        let mainnet_preset = TronAdapter::get_tron_chain_preset(TRON_MAINNET_CHAIN_ID);
+        assert!(mainnet_preset.is_some());
+        let preset = mainnet_preset.unwrap();
+        assert_eq!(preset.chain_id, TRON_MAINNET_CHAIN_ID);
+        assert_eq!(preset.name, "Tron Mainnet");
+        assert_eq!(preset.energy_price, 420);
+        assert_eq!(preset.gas_limit, 50_000_000);
+        assert_eq!(preset.base_fee, 0);
+        assert_eq!(preset.genesis_balance_trx, 10_000);
+
+        // Test Tron Shasta preset
+        let shasta_preset = TronAdapter::get_tron_chain_preset(TRON_SHASTA_CHAIN_ID);
+        assert!(shasta_preset.is_some());
+        let preset = shasta_preset.unwrap();
+        assert_eq!(preset.chain_id, TRON_SHASTA_CHAIN_ID);
+        assert_eq!(preset.name, "Tron Shasta Testnet");
+
+        // Test non-Tron chain
+        assert!(TronAdapter::get_tron_chain_preset(1u64).is_none()); // Ethereum mainnet
+        assert!(TronAdapter::get_tron_chain_preset(31337u64).is_none()); // Anvil default
+    }
+
+    #[test]
+    fn test_energy_gas_conversion() {
+        assert_eq!(TronAdapter::gas_to_energy(1000), 1000);
+        assert_eq!(TronAdapter::energy_to_gas(2000), 2000);
+        assert_eq!(TronAdapter::gas_to_energy(0), 0);
+        assert_eq!(TronAdapter::energy_to_gas(u64::MAX), u64::MAX);
+    }
+
+    #[test]
+    fn test_trx_sun_conversion() {
+        assert_eq!(TronAdapter::trx_to_sun(1), 1_000_000);
+        assert_eq!(TronAdapter::trx_to_sun(10), 10_000_000);
+        assert_eq!(TronAdapter::trx_to_sun(0), 0);
+        
+        assert_eq!(TronAdapter::sun_to_trx(1_000_000), 1);
+        assert_eq!(TronAdapter::sun_to_trx(10_000_000), 10);
+        assert_eq!(TronAdapter::sun_to_trx(500_000), 0); // Less than 1 TRX
+        assert_eq!(TronAdapter::sun_to_trx(1_500_000), 1); // 1.5 TRX rounds down to 1
+    }
+
+    #[test]
+    fn test_apply_tron_preset_to_config() {
+        // Test with Tron mainnet
+        let mut config = crate::NodeConfig::default().with_chain_id(Some(TRON_MAINNET_CHAIN_ID));
+        TronAdapter::apply_tron_preset_to_config(&mut config);
+        
+        assert_eq!(config.gas_limit, Some(50_000_000));
+        assert_eq!(config.gas_price, Some(420));
+        assert_eq!(config.base_fee, Some(0));
+        assert!(config.disable_block_gas_limit);
+        
+        // Genesis balance should be converted from TRX to Sun
+        let expected_balance = U256::from(TronAdapter::trx_to_sun(10_000));
+        assert_eq!(config.genesis_balance, expected_balance);
+
+        // Test with non-Tron chain (should not be modified)
+        let mut eth_config = crate::NodeConfig::default().with_chain_id(Some(1u64));
+        let original_gas_limit = eth_config.gas_limit;
+        let original_gas_price = eth_config.gas_price;
+        let original_base_fee = eth_config.base_fee;
+        let original_balance = eth_config.genesis_balance;
+        let original_disable_gas_limit = eth_config.disable_block_gas_limit;
+        
+        TronAdapter::apply_tron_preset_to_config(&mut eth_config);
+        
+        assert_eq!(eth_config.gas_limit, original_gas_limit);
+        assert_eq!(eth_config.gas_price, original_gas_price);
+        assert_eq!(eth_config.base_fee, original_base_fee);
+        assert_eq!(eth_config.genesis_balance, original_balance);
+        assert_eq!(eth_config.disable_block_gas_limit, original_disable_gas_limit);
+    }
+
     #[tokio::test]
     async fn test_broadcast_transaction() {
         let tx_data = Bytes::from(vec![1, 2, 3, 4]);
@@ -328,7 +518,7 @@ mod tests {
         // Test non-Tron chain
         let result = TronAdapter::broadcast_transaction(
             tx_data,
-            1, // Ethereum mainnet
+            1u64, // Ethereum mainnet
             TronTxMode::Auto,
             None,
         ).await;

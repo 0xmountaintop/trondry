@@ -22,12 +22,14 @@ alwaysApply: false
 - ✅ Task 3.3: Implemented transaction count (nonce) handling for Tron (always returns 0)
 - ✅ Task 3.4: Implemented block tag normalization (force historical queries to "latest")
 - ✅ Task 3.5: Implemented address format handling (0x41 prefix detection, stripping, adding)
-- ✅ Added comprehensive tests for Tron chain ID and transaction count functionality
 - ✅ Task 4.1: Built common signing & protobuf serialization module
 - ✅ Task 4.2: Implemented JSON-RPC path for sending protobuf transactions
 - ✅ Task 4.3: Implemented gRPC path for direct Tron node communication
 - ✅ Task 4.4: Added CLI flag support for transaction mode selection
 - ✅ Task 4.5: Integrated transaction adapter with feature flag support
+- ✅ Task 5.1: Implemented Tron chain presets with energy price mapping
+- ✅ Task 5.2: Implemented gas↔energy 1:1 mapping and relaxed gas checks
+- ✅ Task 5.3: Implemented TRX balance pre-funding in genesis (converted to Sun)
 
 **Key Findings:**
 - Foundry's chain configuration system is flexible and easily extensible
@@ -44,10 +46,11 @@ alwaysApply: false
 - Core Tron transaction broadcasting functionality is complete
 - Both JSON-RPC and gRPC paths are implemented and tested
 - JSON-RPC compatibility layer is complete with block tag normalization and address format handling
-- All 9 Tron-related tests are passing
+- Anvil "Tron Mode" is complete with chain presets, energy mapping, and TRX pre-funding
+- All 13 Tron-related tests are passing
 
 **Next Priority:**
-- Task 5: Anvil "Tron Mode" implementation (chain presets, energy mapping, TRX pre-funding)
+- Task 6: Tests & CI (unit tests, E2E tests, CI integration)
 
 ### TODO
 
@@ -75,9 +78,9 @@ alwaysApply: false
     [X] 4.5 Integrate adapter under `tron` feature flag.
 
 [ ] 5. Anvil "Tron Mode"
-    [ ] 5.1 Add chain preset (chainId, energyPrice mapping).
-    [ ] 5.2 Relax gas checks; map gas↔energy 1:1.
-    [ ] 5.3 Pre-fund TRX balances in genesis.
+    [X] 5.1 Add chain preset (chainId, energyPrice mapping).
+    [X] 5.2 Relax gas checks; map gas↔energy 1:1.
+    [X] 5.3 Pre-fund TRX balances in genesis.
 
 [ ] 6. Tests & CI
     [ ] 6.1 Unit tests for RPC adapter transformations.

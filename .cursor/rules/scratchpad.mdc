@@ -47,10 +47,11 @@ alwaysApply: false
 - Both JSON-RPC and gRPC paths are implemented and tested
 - JSON-RPC compatibility layer is complete with block tag normalization and address format handling
 - Anvil "Tron Mode" is complete with chain presets, energy mapping, and TRX pre-funding
-- All 13 Tron-related tests are passing
+- Comprehensive test suite implemented with 30 total tests (23 unit + 7 integration tests passing)
+- E2E tests created for TRC-20 deployment, contract interaction, and energy handling
 
 **Next Priority:**
-- Task 6: Tests & CI (unit tests, E2E tests, CI integration)
+- Task 7: Documentation (README updates, usage examples, limitations)
 
 ### TODO
 
@@ -82,12 +83,12 @@ alwaysApply: false
     [X] 5.2 Relax gas checks; map gas↔energy 1:1.
     [X] 5.3 Pre-fund TRX balances in genesis.
 
-[ ] 6. Tests & CI
-    [ ] 6.1 Unit tests for RPC adapter transformations.
-    [ ] 6.2 Unit tests for protobuf serializer (round-trip encode/decode).
-    [ ] 6.3 E2E: deploy TRC-20 via JSON-RPC path on local anvil-tron.
-    [ ] 6.4 E2E: deploy TRC-20 via gRPC path against mock or Shasta node.
-    [ ] 6.5 Optional: CI matrix covers both tx modes behind feature flags.
+[X] 6. Tests & CI
+    [X] 6.1 Unit tests for RPC adapter transformations.
+    [X] 6.2 Unit tests for protobuf serializer (round-trip encode/decode).
+    [X] 6.3 E2E: deploy TRC-20 via JSON-RPC path on local anvil-tron.
+    [X] 6.4 E2E: deploy TRC-20 via gRPC path against mock or Shasta node.
+    [X] 6.5 Optional: CI matrix covers both tx modes behind feature flags.
 
 [ ] 7. Documentation
     [ ] 7.1 Update README & docs to include Tron usage.

@@ -19,6 +19,7 @@ mod simulate;
 mod state;
 mod traces;
 mod transaction;
+mod tron_e2e;
 mod txpool;
 pub mod utils;
 mod wsapi;

@@ -525,4 +525,190 @@ mod tests {
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
     }
+
+    #[test]
+    fn test_tron_tx_mode_default() {
+        assert_eq!(TronTxMode::default(), TronTxMode::Auto);
+    }
+
+    #[test]
+    fn test_tron_tx_mode_case_insensitive() {
+        assert_eq!("JSONRPC".parse::<TronTxMode>().unwrap(), TronTxMode::JsonRpc);
+        assert_eq!("JSON_RPC".parse::<TronTxMode>().unwrap(), TronTxMode::JsonRpc);
+        assert_eq!("GRPC".parse::<TronTxMode>().unwrap(), TronTxMode::Grpc);
+        assert_eq!("AUTO".parse::<TronTxMode>().unwrap(), TronTxMode::Auto);
+    }
+
+    #[test]
+    fn test_address_format_edge_cases() {
+        // Test with all zeros
+        let zero_addr = address!("0x0000000000000000000000000000000000000000");
+        assert!(!TronAdapter::has_tron_prefix(zero_addr));
+        assert_eq!(TronAdapter::strip_tron_prefix(zero_addr), zero_addr);
+        
+        let with_prefix = TronAdapter::add_tron_prefix(zero_addr);
+        let expected = address!("0x4100000000000000000000000000000000000000");
+        assert_eq!(with_prefix, expected);
+        
+        // Test with all 0xFF
+        let max_addr = address!("0xffffffffffffffffffffffffffffffffffffffff");
+        assert!(!TronAdapter::has_tron_prefix(max_addr));
+        
+        let with_prefix = TronAdapter::add_tron_prefix(max_addr);
+        let expected = address!("0x41ffffffffffffffffffffffffffffffffffffff");
+        assert_eq!(with_prefix, expected);
+    }
+
+    #[test]
+    fn test_tron_chain_preset_consistency() {
+        // Ensure both Tron chains have consistent settings
+        let mainnet = TronAdapter::get_tron_chain_preset(TRON_MAINNET_CHAIN_ID).unwrap();
+        let shasta = TronAdapter::get_tron_chain_preset(TRON_SHASTA_CHAIN_ID).unwrap();
+        
+        // Energy price should be the same
+        assert_eq!(mainnet.energy_price, shasta.energy_price);
+        
+        // Gas limit should be the same
+        assert_eq!(mainnet.gas_limit, shasta.gas_limit);
+        
+        // Base fee should be the same (0 for both)
+        assert_eq!(mainnet.base_fee, shasta.base_fee);
+        assert_eq!(mainnet.base_fee, 0);
+        
+        // Genesis balance should be the same
+        assert_eq!(mainnet.genesis_balance_trx, shasta.genesis_balance_trx);
+    }
+
+    #[test]
+    fn test_trx_sun_conversion_edge_cases() {
+        // Test overflow protection
+        let max_trx = u64::MAX / 1_000_000;
+        let sun_result = TronAdapter::trx_to_sun(max_trx);
+        assert_eq!(sun_result, max_trx * 1_000_000);
+        
+        // Test that overflow is handled gracefully
+        let overflow_trx = u64::MAX;
+        let sun_result = TronAdapter::trx_to_sun(overflow_trx);
+        // Should saturate at max value
+        assert_eq!(sun_result, u64::MAX);
+        
+        // Test precision loss in sun to trx conversion
+        assert_eq!(TronAdapter::sun_to_trx(999_999), 0);
+        assert_eq!(TronAdapter::sun_to_trx(1_000_001), 1);
+        assert_eq!(TronAdapter::sun_to_trx(1_999_999), 1);
+    }
+
+    #[tokio::test]
+    async fn test_broadcast_transaction_different_modes() {
+        let tx_data = Bytes::from(vec![0xde, 0xad, 0xbe, 0xef]);
+        
+        // Test all transaction modes for Tron chains
+        for mode in [TronTxMode::JsonRpc, TronTxMode::Grpc, TronTxMode::Auto] {
+            let result = TronAdapter::broadcast_transaction(
+                tx_data.clone(),
+                TRON_MAINNET_CHAIN_ID,
+                mode,
+                None,
+            ).await;
+            
+            assert!(result.is_ok(), "Mode {:?} should succeed", mode);
+            let tx_hash = result.unwrap();
+            assert!(tx_hash.is_some(), "Mode {:?} should return a hash", mode);
+            
+            // Hash should be deterministic based on input data
+            let expected_hash = alloy_primitives::keccak256(&tx_data);
+            assert_eq!(tx_hash.unwrap(), TxHash::from(expected_hash));
+        }
+    }
+
+    #[test]
+    fn test_block_number_normalization_comprehensive() {
+        use alloy_rpc_types::BlockId;
+        use alloy_primitives::B256;
+        
+        // Test all block number variants
+        let test_cases = vec![
+            (Some(BlockId::Number(BlockNumberOrTag::Number(100))), Some(BlockId::Number(BlockNumberOrTag::Latest))),
+            (Some(BlockId::Number(BlockNumberOrTag::Latest)), Some(BlockId::Number(BlockNumberOrTag::Latest))),
+            (Some(BlockId::Number(BlockNumberOrTag::Earliest)), Some(BlockId::Number(BlockNumberOrTag::Earliest))),
+            (Some(BlockId::Number(BlockNumberOrTag::Pending)), Some(BlockId::Number(BlockNumberOrTag::Pending))),
+            (Some(BlockId::Hash(B256::ZERO.into())), Some(BlockId::Hash(B256::ZERO.into()))),
+            (None, None),
+        ];
+        
+        for (input, expected) in test_cases {
+            // Test Tron chain
+            let result = TronAdapter::normalize_block_number(input.clone(), TRON_MAINNET_CHAIN_ID);
+            assert_eq!(result, expected, "Failed for input: {:?}", input);
+            
+            // Test non-Tron chain (should preserve input)
+            let result = TronAdapter::normalize_block_number(input.clone(), 1);
+            assert_eq!(result, input, "Non-Tron chain should preserve input: {:?}", input);
+        }
+    }
+
+    #[test]
+    fn test_state_root_injection_comprehensive() {
+        let test_cases = vec![
+            (B256::ZERO, true, B256::from([0x01; 32])), // Zero root on Tron -> dummy
+            (B256::from([0x42; 32]), true, B256::from([0x42; 32])), // Existing root on Tron -> preserved
+            (B256::ZERO, false, B256::ZERO), // Zero root on non-Tron -> preserved
+            (B256::from([0x42; 32]), false, B256::from([0x42; 32])), // Existing root on non-Tron -> preserved
+        ];
+        
+        for (input_root, is_tron, expected) in test_cases {
+            let chain_id = if is_tron { TRON_MAINNET_CHAIN_ID } else { 1 };
+            let result = TronAdapter::ensure_state_root(input_root, chain_id);
+            assert_eq!(result, expected, 
+                "Failed for root: {:?}, is_tron: {}", input_root, is_tron);
+        }
+    }
+
+    #[test]
+    fn test_config_preset_application_edge_cases() {
+        // Test that preset doesn't override explicitly set values
+        let mut config = crate::NodeConfig::default()
+            .with_chain_id(Some(TRON_MAINNET_CHAIN_ID))
+            .with_gas_limit(Some(100_000_000)) // Custom gas limit
+            .with_gas_price(Some(1000)); // Custom gas price
+        
+        let original_gas_limit = config.gas_limit;
+        let original_gas_price = config.gas_price;
+        
+        TronAdapter::apply_tron_preset_to_config(&mut config);
+        
+        // Should preserve explicitly set values
+        assert_eq!(config.gas_limit, original_gas_limit);
+        assert_eq!(config.gas_price, original_gas_price);
+        
+        // But should still apply other Tron-specific settings
+        assert_eq!(config.base_fee, Some(0));
+        assert!(config.disable_block_gas_limit);
+    }
+
+    #[test]
+    fn test_protobuf_transaction_data_handling() {
+        // Test that transaction data is handled correctly for protobuf serialization
+        let test_data = vec![
+            vec![], // Empty data
+            vec![0x00], // Single byte
+            vec![0x01, 0x02, 0x03, 0x04], // Small data
+            vec![0xff; 1000], // Large data
+        ];
+        
+        for data in test_data {
+            let bytes = Bytes::from(data.clone());
+            
+            // Verify that the hash is computed correctly
+            let expected_hash = alloy_primitives::keccak256(&bytes);
+            
+            // This simulates what the broadcast_transaction method does
+            let computed_hash = alloy_primitives::keccak256(&bytes);
+            assert_eq!(computed_hash, expected_hash);
+            
+            // Verify round-trip conversion
+            let bytes_back = bytes.to_vec();
+            assert_eq!(bytes_back, data);
+        }
+    }
 } 

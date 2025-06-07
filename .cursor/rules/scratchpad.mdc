@@ -20,6 +20,8 @@ alwaysApply: false
 - ✅ Task 3.1: Created Tron adapter module with helper functions
 - ✅ Task 3.2: Implemented state root injection for Tron blocks (dummy value when missing)
 - ✅ Task 3.3: Implemented transaction count (nonce) handling for Tron (always returns 0)
+- ✅ Task 3.4: Implemented block tag normalization (force historical queries to "latest")
+- ✅ Task 3.5: Implemented address format handling (0x41 prefix detection, stripping, adding)
 - ✅ Added comprehensive tests for Tron chain ID and transaction count functionality
 - ✅ Task 4.1: Built common signing & protobuf serialization module
 - ✅ Task 4.2: Implemented JSON-RPC path for sending protobuf transactions
@@ -41,11 +43,11 @@ alwaysApply: false
 **Current Status:**
 - Core Tron transaction broadcasting functionality is complete
 - Both JSON-RPC and gRPC paths are implemented and tested
-- Ready to move to remaining RPC compatibility layer tasks
+- JSON-RPC compatibility layer is complete with block tag normalization and address format handling
+- All 9 Tron-related tests are passing
 
 **Next Priority:**
-- Task 3.4-3.5: Address format handling and block tag normalization
-- Task 5: Anvil "Tron Mode" implementation
+- Task 5: Anvil "Tron Mode" implementation (chain presets, energy mapping, TRX pre-funding)
 
 ### TODO
 
@@ -58,12 +60,12 @@ alwaysApply: false
     [X] 2.1 Add `tron-mainnet` & `tron-shasta` variants in chain config crate (chainId, network name).
     [X] 2.2 Expose CLI flag/env var to select Tron (`--chain tron`).
 
-[ ] 3. JSON-RPC Compatibility Layer
+[X] 3. JSON-RPC Compatibility Layer
     [X] 3.1 Create Tron adapter module with helper functions.
     [X] 3.2 Inject dummy `stateRoot` for Tron blocks if missing.
     [X] 3.3 Return constant `0x0` for `eth_getTransactionCount`.
-    [ ] 3.4 Force block tags to `"latest"` for unsupported historical queries.
-    [ ] 3.5 Handle address format conversion (0x41 prefix).
+    [X] 3.4 Force block tags to `"latest"` for unsupported historical queries.
+    [X] 3.5 Handle address format conversion (0x41 prefix).
 
 [X] 4. Transaction Adapter
     [X] 4.1 Build common signing & protobuf serialization module.

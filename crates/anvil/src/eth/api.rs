@@ -703,7 +703,14 @@ impl EthApi {
     /// Handler for ETH RPC call: `eth_getBalance`
     pub async fn balance(&self, address: Address, block_number: Option<BlockId>) -> Result<U256> {
         node_info!("eth_getBalance");
-        let block_request = self.block_request(block_number).await?;
+        
+        // Apply Tron block tag normalization if needed
+        let normalized_block_number = crate::eth::tron::TronAdapter::normalize_block_number(
+            block_number,
+            self.backend.chain_id().to::<u64>(),
+        );
+        
+        let block_request = self.block_request(normalized_block_number).await?;
 
         // check if the number predates the fork, if in fork mode
         if let BlockRequest::Number(number) = block_request {
@@ -769,7 +776,14 @@ impl EthApi {
         block_number: Option<BlockId>,
     ) -> Result<B256> {
         node_info!("eth_getStorageAt");
-        let block_request = self.block_request(block_number).await?;
+        
+        // Apply Tron block tag normalization if needed
+        let normalized_block_number = crate::eth::tron::TronAdapter::normalize_block_number(
+            block_number,
+            self.backend.chain_id().to::<u64>(),
+        );
+        
+        let block_request = self.block_request(normalized_block_number).await?;
 
         // check if the number predates the fork, if in fork mode
         if let BlockRequest::Number(number) = block_request {
@@ -903,7 +917,14 @@ impl EthApi {
     /// Handler for ETH RPC call: `eth_getCode`
     pub async fn get_code(&self, address: Address, block_number: Option<BlockId>) -> Result<Bytes> {
         node_info!("eth_getCode");
-        let block_request = self.block_request(block_number).await?;
+        
+        // Apply Tron block tag normalization if needed
+        let normalized_block_number = crate::eth::tron::TronAdapter::normalize_block_number(
+            block_number,
+            self.backend.chain_id().to::<u64>(),
+        );
+        
+        let block_request = self.block_request(normalized_block_number).await?;
         // check if the number predates the fork, if in fork mode
         if let BlockRequest::Number(number) = block_request {
             if let Some(fork) = self.get_fork() {
@@ -1121,7 +1142,14 @@ impl EthApi {
         overrides: EvmOverrides,
     ) -> Result<Bytes> {
         node_info!("eth_call");
-        let block_request = self.block_request(block_number).await?;
+        
+        // Apply Tron block tag normalization if needed
+        let normalized_block_number = crate::eth::tron::TronAdapter::normalize_block_number(
+            block_number,
+            self.backend.chain_id().to::<u64>(),
+        );
+        
+        let block_request = self.block_request(normalized_block_number).await?;
         // check if the number predates the fork, if in fork mode
         if let BlockRequest::Number(number) = block_request {
             if let Some(fork) = self.get_fork() {

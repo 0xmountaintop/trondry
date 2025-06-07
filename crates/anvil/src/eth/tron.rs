@@ -120,7 +120,8 @@ impl TronAdapter {
         if bytes[0] != 0x41 {
             let mut new_bytes = [0u8; 20];
             new_bytes[0] = 0x41;
-            new_bytes[1..].copy_from_slice(&bytes[..19]);
+            // Copy the last 19 bytes of the original address
+            new_bytes[1..].copy_from_slice(&bytes[1..]);
             Address::from(new_bytes)
         } else {
             address
@@ -252,6 +253,26 @@ mod tests {
             TronAdapter::normalize_block_number(latest, TRON_MAINNET_CHAIN_ID),
             latest
         );
+
+        // Earliest should stay earliest
+        let earliest = Some(BlockId::Number(BlockNumberOrTag::Earliest));
+        assert_eq!(
+            TronAdapter::normalize_block_number(earliest, TRON_MAINNET_CHAIN_ID),
+            earliest
+        );
+
+        // Pending should stay pending
+        let pending = Some(BlockId::Number(BlockNumberOrTag::Pending));
+        assert_eq!(
+            TronAdapter::normalize_block_number(pending, TRON_MAINNET_CHAIN_ID),
+            pending
+        );
+
+        // None should stay None
+        assert_eq!(
+            TronAdapter::normalize_block_number(None, TRON_MAINNET_CHAIN_ID),
+            None
+        );
     }
 
     #[test]
@@ -262,6 +283,32 @@ mod tests {
         assert_eq!("auto".parse::<TronTxMode>().unwrap(), TronTxMode::Auto);
         
         assert!("invalid".parse::<TronTxMode>().is_err());
+    }
+
+    #[test]
+    fn test_address_format_handling() {
+        // Test Tron prefix detection
+        let tron_addr = address!("0x4100000000000000000000000000000000000000");
+        let eth_addr = address!("0x1234567890123456789012345678901234567890");
+        
+        assert!(TronAdapter::has_tron_prefix(tron_addr));
+        assert!(!TronAdapter::has_tron_prefix(eth_addr));
+        
+        // Test stripping Tron prefix
+        let stripped = TronAdapter::strip_tron_prefix(tron_addr);
+        let expected_stripped = address!("0x0000000000000000000000000000000000000000");
+        assert_eq!(stripped, expected_stripped);
+        
+        // Stripping non-Tron address should return original
+        assert_eq!(TronAdapter::strip_tron_prefix(eth_addr), eth_addr);
+        
+        // Test adding Tron prefix
+        let with_prefix = TronAdapter::add_tron_prefix(eth_addr);
+        let expected_with_prefix = address!("0x4134567890123456789012345678901234567890");
+        assert_eq!(with_prefix, expected_with_prefix);
+        
+        // Adding prefix to already prefixed address should return original
+        assert_eq!(TronAdapter::add_tron_prefix(tron_addr), tron_addr);
     }
 
     #[tokio::test]

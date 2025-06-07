@@ -31,6 +31,8 @@ Foundry consists of:
 - [**Anvil**](#anvil): Fast local Ethereum development node, akin to Hardhat Network, Tenderly.
 - [**Chisel**](#chisel): Fast, utilitarian, and verbose Solidity REPL.
 
+**🚀 NEW: Tron Network Support** - Foundry now supports Tron networks! Deploy and interact with TRC-20 tokens and smart contracts on Tron Mainnet and Shasta Testnet. [Learn more](#tron-network-support).
+
 **Need help getting started with Foundry? Read the [📖 Foundry Book][foundry-book]!**
 
 ![Demo](.github/assets/demo.gif)
@@ -288,6 +290,121 @@ contract REPL {
 Run `chisel --help` to explore the full list of available features and their usage.
 
 More documentation can be found in the [chisel][foundry-book-chisel] section of the Foundry Book.
+
+## Tron Network Support
+
+Foundry now supports Tron networks, enabling you to deploy and interact with smart contracts on Tron Mainnet and Shasta Testnet. Tron's Virtual Machine (TVM) is EVM-compatible, so your existing Solidity contracts work seamlessly.
+
+### Quick Start with Tron
+
+**Deploy a contract to Tron Shasta Testnet:**
+
+```sh
+# Start local Tron development node
+anvil --chain-id 2494104990
+
+# Deploy your contract
+forge create MyContract --rpc-url http://localhost:8545 --private-key <your-key>
+
+# Interact with Tron Mainnet
+cast call <contract-address> "balanceOf(address)" <address> --rpc-url https://api.trongrid.io
+```
+
+### Supported Networks
+
+| Network | Chain ID | RPC URL |
+|---------|----------|---------|
+| Tron Mainnet | 728126428 | https://api.trongrid.io |
+| Tron Shasta Testnet | 2494104990 | https://api.shasta.trongrid.io |
+
+### Key Features
+
+- **🔄 Full TVM Compatibility**: Deploy existing Solidity contracts without modification
+- **⚡ Energy Model Support**: Automatic gas-to-energy conversion (1:1 mapping)
+- **🏦 TRC-20 Token Support**: Deploy and interact with TRC-20 tokens
+- **🔧 Local Development**: Use `anvil` with Tron chain presets for testing
+- **📡 RPC Compatibility**: Works with TronGrid and other Tron RPC providers
+
+### Configuration
+
+Add Tron networks to your `foundry.toml`:
+
+```toml
+[profile.default]
+# Your existing config...
+
+# Tron Mainnet
+[rpc_endpoints]
+tron = "https://api.trongrid.io"
+tron_shasta = "https://api.shasta.trongrid.io"
+
+# Tron-specific settings
+[profile.tron]
+chain_id = 728126428
+gas_price = 420  # Energy price in Sun
+gas_limit = 50000000
+```
+
+### Examples
+
+**Deploy a TRC-20 Token:**
+
+```sh
+# Create a new project
+forge init my-trc20
+
+# Deploy to Tron Shasta
+forge create src/MyToken.sol:MyToken \
+  --rpc-url https://api.shasta.trongrid.io \
+  --private-key $PRIVATE_KEY \
+  --constructor-args "MyToken" "MTK" 18 1000000000000000000000000
+```
+
+**Local Development with Anvil:**
+
+```sh
+# Start Tron Mainnet fork
+anvil --chain-id 728126428 --gas-price 420
+
+# Or start Tron Shasta
+anvil --chain-id 2494104990 --gas-price 420
+```
+
+**Interact with Contracts:**
+
+```sh
+# Check TRX balance (in Sun)
+cast balance <address> --rpc-url https://api.trongrid.io
+
+# Call a TRC-20 contract
+cast call <token-address> "totalSupply()" --rpc-url https://api.trongrid.io
+
+# Send TRX
+cast send <to-address> --value 1000000 --rpc-url https://api.shasta.trongrid.io --private-key $PRIVATE_KEY
+```
+
+### Important Differences
+
+When working with Tron networks, keep these key differences in mind:
+
+- **No Nonces**: Tron doesn't use account nonces - transactions are processed differently
+- **Energy vs Gas**: Tron uses "Energy" instead of gas, but Foundry handles the conversion automatically
+- **Address Format**: Tron addresses may have a `0x41` prefix, which Foundry handles transparently
+- **Currency**: Balances are in "Sun" (1 TRX = 1,000,000 Sun), similar to Wei for Ethereum
+- **Block Queries**: Some historical block queries may be limited to "latest" on Tron nodes
+
+### Limitations
+
+- **Forking**: Historical state forking is limited due to Tron's architecture
+- **Debugging**: Advanced debugging features work best with local `anvil` instances
+- **RPC Methods**: Some Ethereum-specific RPC methods may not be available on Tron
+
+### Getting Help
+
+For Tron-specific issues:
+- Check the [Tron Developer Documentation](https://developers.tron.network/)
+- Join our [Telegram support channel][tg-support-url]
+- Review the [TronGrid API documentation](https://developers.tron.network/docs/tron-grid-intro)
 
 ## Configuration
 

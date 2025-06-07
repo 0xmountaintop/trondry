@@ -51,7 +51,7 @@ alwaysApply: false
 - E2E tests created for TRC-20 deployment, contract interaction, and energy handling
 
 **Next Priority:**
-- Task 7: Documentation (README updates, usage examples, limitations)
+- Task 8: Release Plan & Stabilization (feature gate, community feedback)
 
 ### TODO
 
@@ -90,9 +90,9 @@ alwaysApply: false
     [X] 6.4 E2E: deploy TRC-20 via gRPC path against mock or Shasta node.
     [X] 6.5 Optional: CI matrix covers both tx modes behind feature flags.
 
-[ ] 7. Documentation
-    [ ] 7.1 Update README & docs to include Tron usage.
-    [ ] 7.2 Highlight limitations (no historical forking, nonce stub, etc.).
+[X] 7. Documentation
+    [X] 7.1 Update README & docs to include Tron usage.
+    [X] 7.2 Highlight limitations (no historical forking, nonce stub, etc.).
 
 [ ] 8. Release Plan & Stabilization
     [ ] 8.1 Feature gate (`--experimental-tron`).

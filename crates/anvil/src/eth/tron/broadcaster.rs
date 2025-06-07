@@ -16,12 +16,26 @@ use {
     prost::Message,
     sha2::{Digest, Sha256},
     k256::ecdsa::{SigningKey, Signature, signature::Signer},
+    serde::Deserialize,
 };
 
 use super::{TronTxMode, is_tron_chain};
 
 #[cfg(feature = "tron")]
 use super::proto;
+
+/// JSON-RPC block structure for deserializing Ethereum-compatible block data
+#[cfg(feature = "tron")]
+#[derive(Debug, Deserialize)]
+struct EthBlock {
+    number: String,
+    timestamp: String,
+    #[serde(rename = "parentHash")]
+    parent_hash: String,
+    #[serde(rename = "transactionsRoot")]
+    transactions_root: Option<String>,
+    miner: Option<String>,
+}
 
 /// Simple transaction structure for internal use
 #[derive(Debug, Clone)]
@@ -278,27 +292,124 @@ impl TronBroadcaster {
     }
 
     #[cfg(feature = "tron")]
-    async fn get_latest_block_jsonrpc(&self, _rpc_url: &str) -> Result<proto::protocol::Block> {
-        // This would make a JSON-RPC call to get the latest block
-        // For now, return a minimal block structure
+    async fn get_latest_block_jsonrpc(&self, rpc_url: &str) -> Result<proto::protocol::Block> {
+        // Create JSON-RPC request for latest block
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "eth_getBlockByNumber",
+            "params": ["latest", false], // false = don't include full transaction objects
+            "id": 1
+        });
+
+        // Send HTTP request
+        let client = reqwest::Client::new();
+        let response = client
+            .post(rpc_url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| eyre!("HTTP request failed: {}", e))?;
+
+        let result: serde_json::Value = response.json().await
+            .map_err(|e| eyre!("Failed to parse JSON response: {}", e))?;
+        
+        // Check for JSON-RPC error
+        if let Some(error) = result.get("error") {
+            return Err(eyre!("JSON-RPC error: {}", error));
+        }
+
+        // Extract the result field
+        let block_data = result.get("result")
+            .ok_or_else(|| eyre!("Missing 'result' field in JSON-RPC response"))?;
+
+        // Handle null result (no block found)
+        if block_data.is_null() {
+            return Err(eyre!("RPC returned null block"));
+        }
+
+        // Deserialize into our EthBlock structure
+        let eth_block: EthBlock = serde_json::from_value(block_data.clone())
+            .map_err(|e| eyre!("Failed to deserialize block data: {}", e))?;
+
+        // Convert hex strings to appropriate types
+        let block_number = u64::from_str_radix(
+            eth_block.number.trim_start_matches("0x"), 
+            16
+        ).map_err(|e| eyre!("Invalid block number: {}", e))?;
+
+        let timestamp = u64::from_str_radix(
+            eth_block.timestamp.trim_start_matches("0x"), 
+            16
+        ).map_err(|e| eyre!("Invalid timestamp: {}", e))? as i64;
+
+        // Convert parent hash to bytes (must be 32 bytes)
+        let parent_hash_hex = eth_block.parent_hash.trim_start_matches("0x");
+        let mut parent_hash = hex::decode(parent_hash_hex)
+            .map_err(|e| eyre!("Invalid parent hash: {}", e))?;
+        
+        // Ensure parent hash is exactly 32 bytes
+        if parent_hash.len() != 32 {
+            if parent_hash.len() < 32 {
+                // Pad with zeros if too short
+                parent_hash.resize(32, 0);
+            } else {
+                // Truncate if too long
+                parent_hash.truncate(32);
+            }
+        }
+
+        // Convert transactions root to bytes (optional field)
+        let tx_trie_root = if let Some(tx_root) = &eth_block.transactions_root {
+            let tx_root_hex = tx_root.trim_start_matches("0x");
+            let mut tx_root_bytes = hex::decode(tx_root_hex)
+                .map_err(|e| eyre!("Invalid transactions root: {}", e))?;
+            
+            // Ensure 32 bytes
+            if tx_root_bytes.len() != 32 {
+                if tx_root_bytes.len() < 32 {
+                    tx_root_bytes.resize(32, 0);
+                } else {
+                    tx_root_bytes.truncate(32);
+                }
+            }
+            tx_root_bytes
+        } else {
+            vec![0u8; 32] // Default empty root
+        };
+
+        // Convert miner address to witness_address (optional field)
+        let witness_address = if let Some(miner) = &eth_block.miner {
+            let miner_hex = miner.trim_start_matches("0x");
+            // Remove 0x41 prefix if present (Tron-specific)
+            let clean_hex = if miner_hex.starts_with("41") {
+                &miner_hex[2..]
+            } else {
+                miner_hex
+            };
+            
+            hex::decode(clean_hex)
+                .map_err(|e| eyre!("Invalid miner address: {}", e))?
+        } else {
+            vec![]
+        };
+
+        // Create the block header
         let block_header = proto::protocol::BlockHeader {
             raw_data: Some(proto::protocol::block_header::Raw {
-                timestamp: SystemTime::now()
-                    .duration_since(UNIX_EPOCH)?
-                    .as_millis() as i64,
-                tx_trie_root: vec![],
-                parent_hash: vec![0u8; 32],
-                number: 1000000, // Placeholder block number
-                witness_id: 0,
-                witness_address: vec![],
-                version: 1,
-                account_state_root: vec![],
+                timestamp,
+                tx_trie_root,
+                parent_hash,
+                number: block_number as i64,
+                witness_id: 0, // Not available via JSON-RPC
+                witness_address,
+                version: 1, // Default version
+                account_state_root: vec![], // Not available via JSON-RPC
             }),
-            witness_signature: vec![],
+            witness_signature: vec![], // Not available via JSON-RPC
         };
 
         Ok(proto::protocol::Block {
-            transactions: vec![],
+            transactions: vec![], // We requested without full transaction objects
             block_header: Some(block_header),
         })
     }
@@ -471,5 +582,177 @@ mod tests {
         
         let contract = result.unwrap();
         assert_eq!(contract.r#type, proto::protocol::transaction::contract::ContractType::TriggerSmartContract as i32);
+    }
+
+    #[cfg(feature = "tron")]
+    #[test]
+    fn test_eth_block_deserialization() {
+        let json_data = serde_json::json!({
+            "number": "0xf4240",
+            "timestamp": "0x5f5e100",
+            "parentHash": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+            "transactionsRoot": "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+            "miner": "0x41a1b2c3d4e5f6789012345678901234567890ab"
+        });
+
+        let eth_block: EthBlock = serde_json::from_value(json_data).unwrap();
+        
+        assert_eq!(eth_block.number, "0xf4240");
+        assert_eq!(eth_block.timestamp, "0x5f5e100");
+        assert_eq!(eth_block.parent_hash, "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+        assert_eq!(eth_block.transactions_root, Some("0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string()));
+        assert_eq!(eth_block.miner, Some("0x41a1b2c3d4e5f6789012345678901234567890ab".to_string()));
+    }
+
+    #[cfg(feature = "tron")]
+    #[test]
+    fn test_eth_block_deserialization_minimal() {
+        let json_data = serde_json::json!({
+            "number": "0x1",
+            "timestamp": "0x1000",
+            "parentHash": "0x0000000000000000000000000000000000000000000000000000000000000000"
+        });
+
+        let eth_block: EthBlock = serde_json::from_value(json_data).unwrap();
+        
+        assert_eq!(eth_block.number, "0x1");
+        assert_eq!(eth_block.timestamp, "0x1000");
+        assert_eq!(eth_block.parent_hash, "0x0000000000000000000000000000000000000000000000000000000000000000");
+        assert_eq!(eth_block.transactions_root, None);
+        assert_eq!(eth_block.miner, None);
+    }
+
+    // Integration test for get_latest_block_jsonrpc (requires network access)
+    #[cfg(feature = "tron")]
+    #[tokio::test]
+    #[ignore] // Ignored by default since it requires network access
+    async fn test_get_latest_block_jsonrpc_integration() {
+        let broadcaster = TronBroadcaster::new(
+            TRON_SHASTA_CHAIN_ID,
+            TronTxMode::JsonRpc,
+            Some("https://api.shasta.trongrid.io/jsonrpc".to_string()),
+        );
+        
+        // This test requires a live Tron network connection
+        if let Ok(block) = broadcaster.get_latest_block_jsonrpc("https://api.shasta.trongrid.io/jsonrpc").await {
+            assert!(block.block_header.is_some());
+            let header = block.block_header.unwrap();
+            assert!(header.raw_data.is_some());
+            let raw_data = header.raw_data.unwrap();
+            assert!(raw_data.number > 0);
+            assert!(raw_data.timestamp > 0);
+            assert_eq!(raw_data.parent_hash.len(), 32);
+        }
+    }
+
+    // Unit test with mock JSON response
+    #[cfg(feature = "tron")]
+    #[tokio::test]
+    async fn test_get_latest_block_jsonrpc_mock() {
+        use mockito::Server;
+        
+        let mut server = Server::new_async().await;
+        let mock = server.mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "number": "0xf4240",
+                    "timestamp": "0x5f5e100",
+                    "parentHash": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+                    "transactionsRoot": "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+                    "miner": "0x41a1b2c3d4e5f6789012345678901234567890ab"
+                }
+            }"#)
+            .create_async()
+            .await;
+
+        let broadcaster = TronBroadcaster::new(
+            TRON_MAINNET_CHAIN_ID,
+            TronTxMode::JsonRpc,
+            Some(server.url()),
+        );
+
+        let result = broadcaster.get_latest_block_jsonrpc(&server.url()).await;
+        assert!(result.is_ok());
+
+        let block = result.unwrap();
+        assert!(block.block_header.is_some());
+        
+        let header = block.block_header.unwrap();
+        assert!(header.raw_data.is_some());
+        
+        let raw_data = header.raw_data.unwrap();
+        assert_eq!(raw_data.number, 1000000); // 0xf4240
+        assert_eq!(raw_data.timestamp, 100000000); // 0x5f5e100
+        assert_eq!(raw_data.parent_hash.len(), 32);
+        assert_eq!(raw_data.tx_trie_root.len(), 32);
+        
+        mock.assert_async().await;
+    }
+
+    #[cfg(feature = "tron")]
+    #[tokio::test]
+    async fn test_get_latest_block_jsonrpc_error_handling() {
+        use mockito::Server;
+        
+        let mut server = Server::new_async().await;
+        let mock = server.mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": -32000,
+                    "message": "Block not found"
+                }
+            }"#)
+            .create_async()
+            .await;
+
+        let broadcaster = TronBroadcaster::new(
+            TRON_MAINNET_CHAIN_ID,
+            TronTxMode::JsonRpc,
+            Some(server.url()),
+        );
+
+        let result = broadcaster.get_latest_block_jsonrpc(&server.url()).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("JSON-RPC error"));
+        
+        mock.assert_async().await;
+    }
+
+    #[cfg(feature = "tron")]
+    #[tokio::test]
+    async fn test_get_latest_block_jsonrpc_null_result() {
+        use mockito::Server;
+        
+        let mut server = Server::new_async().await;
+        let mock = server.mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": null
+            }"#)
+            .create_async()
+            .await;
+
+        let broadcaster = TronBroadcaster::new(
+            TRON_MAINNET_CHAIN_ID,
+            TronTxMode::JsonRpc,
+            Some(server.url()),
+        );
+
+        let result = broadcaster.get_latest_block_jsonrpc(&server.url()).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("RPC returned null block"));
+        
+        mock.assert_async().await;
     }
 } 

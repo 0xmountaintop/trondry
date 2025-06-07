@@ -120,6 +120,7 @@ alloy-pubsub.workspace = true
 rand.workspace = true
 foundry-test-utils.workspace = true
 tokio = { workspace = true, features = ["full"] }
+mockito = "1.4"
 
 op-alloy-rpc-types.workspace = true
 

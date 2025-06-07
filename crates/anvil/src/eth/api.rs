@@ -1100,6 +1100,7 @@ impl EthApi {
             self.chain_id(),
             crate::eth::tron::TronTxMode::Auto,
             None, // TODO: Pass RPC URL when available
+            None, // TODO: Pass private key when available for signing
         ).await {
             return Ok(tx_hash);
         }

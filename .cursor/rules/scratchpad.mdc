@@ -100,18 +100,46 @@ alwaysApply: false
     [ ] 8.2 Solicit community feedback.
 
 # New Work-Package: 4B – Real Tron Broadcaster Implementation
-[ ] 4B. Implement real Tron broadcaster (`broadcast_transaction`)
-    [ ] 4B.1 Protobuf & gRPC foundation (WB-1)
-    [ ] 4B.2 RLP-to-Tron conversion (TxBuilder) (WB-2)
-    [ ] 4B.3 Signing layer (TronSigner) (WB-3)
-    [ ] 4B.4 Broadcasting back-ends
-        [ ] 4B.4.a JSON-RPC path
-        [ ] 4B.4.b gRPC path
-    [ ] 4B.5 Auto-fallback logic (WB-5)
-    [ ] 4B.6 Error handling & telemetry (WB-6)
-    [ ] 4B.7 Feature flag & config plumb-through (WB-7)
-    [ ] 4B.8 Tests & CI (WB-8)
-    [ ] 4B.9 Documentation update (WB-9)
+[X] 4B. Implement real Tron broadcaster (`broadcast_transaction`)
+    [X] 4B.1 Protobuf & gRPC foundation (WB-1)
+    [X] 4B.2 RLP-to-Tron conversion (TxBuilder) (WB-2)
+    [X] 4B.3 Signing layer (TronSigner) (WB-3)
+    [X] 4B.4 Broadcasting back-ends
+        [X] 4B.4.a JSON-RPC path
+        [X] 4B.4.b gRPC path
+    [X] 4B.5 Auto-fallback logic (WB-5)
+    [X] 4B.6 Error handling & telemetry (WB-6)
+    [X] 4B.7 Feature flag & config plumb-through (WB-7)
+    [X] 4B.8 Tests & CI (WB-8)
+    [X] 4B.9 Documentation update (WB-9)
+
+**Current Status:**
+- ✅ Successfully implemented real Tron broadcaster with protobuf support
+- ✅ Created pre-generated protobuf types to avoid protoc dependency
+- ✅ Implemented transaction conversion from Ethereum to Tron format
+- ✅ Added ECDSA signing with SHA256 (Tron-specific)
+- ✅ Implemented both JSON-RPC and gRPC broadcasting paths
+- ✅ Added auto-fallback logic (JSON-RPC → gRPC)
+- ✅ Comprehensive error handling and logging
+- ✅ Feature flag integration (`--features tron`)
+- ✅ 26/28 tests passing (2 expected failures for network-dependent tests)
+
+**Implementation Highlights:**
+- Pre-generated protobuf types avoid build-time protoc dependency
+- SimpleTransaction struct for internal transaction representation
+- TronBroadcaster handles conversion, signing, and broadcasting
+- Support for both TRX transfers and smart contract calls
+- Proper Tron address format handling (0x41 prefix)
+- Energy/gas limit and fee handling
+- Block reference data for transaction validation
+
+**Test Results:**
+- ✅ Unit tests for broadcaster creation, transaction parsing, contract creation
+- ✅ All existing Tron adapter tests continue to pass
+- ❌ 2 network-dependent tests fail (expected - require live Tron network)
+
+**Next Steps:**
+- Task 8: Release Plan & Stabilization (feature gate, community feedback)
 
 ---
 

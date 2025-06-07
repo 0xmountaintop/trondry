@@ -11,6 +11,15 @@
 use alloy_primitives::{Address, B256, Bytes, TxHash, U256};
 use alloy_rpc_types::{BlockId, BlockNumberOrTag};
 
+#[cfg(feature = "tron")]
+pub mod broadcaster;
+
+#[cfg(feature = "tron")]
+pub mod proto;
+
+#[cfg(feature = "tron")]
+pub use broadcaster::TronBroadcaster;
+
 /// Tron chain IDs
 pub const TRON_MAINNET_CHAIN_ID: u64 = 728126428;
 pub const TRON_SHASTA_CHAIN_ID: u64 = 2494104990;
@@ -130,45 +139,44 @@ impl TronAdapter {
 
     /// Handle Tron transaction broadcasting
     /// 
-    /// This method attempts to broadcast a transaction to a Tron network using the specified mode.
-    /// For now, this is a placeholder that simulates the broadcast and returns a dummy hash.
-    /// In a real implementation, this would:
-    /// 1. Convert the Ethereum-style transaction to Tron protobuf format
-    /// 2. Broadcast via JSON-RPC eth_sendRawTransaction or gRPC broadcastTransaction
-    /// 3. Return the actual transaction hash from the network
+    /// This method broadcasts a transaction to a Tron network using the specified mode.
+    /// It converts the Ethereum-style transaction to Tron protobuf format and broadcasts
+    /// via JSON-RPC eth_sendRawTransaction or gRPC broadcastTransaction.
     pub async fn broadcast_transaction(
         tx_data: Bytes,
         chain_id: u64,
         mode: TronTxMode,
-        _rpc_url: Option<&str>,
+        rpc_url: Option<&str>,
+        private_key: Option<&[u8]>,
     ) -> Result<Option<TxHash>, String> {
         if !is_tron_chain(chain_id) {
             return Ok(None); // Not a Tron chain, use normal logic
         }
 
-        // TODO: Implement actual Tron transaction broadcasting
-        // This is a placeholder implementation
-        match mode {
-            TronTxMode::JsonRpc => {
-                // TODO: Convert tx_data to Tron protobuf format
-                // TODO: Call JSON-RPC eth_sendRawTransaction with protobuf data
-                tracing::info!("Broadcasting Tron transaction via JSON-RPC (placeholder)");
-            }
-            TronTxMode::Grpc => {
-                // TODO: Convert tx_data to Tron protobuf format  
-                // TODO: Call gRPC broadcastTransaction
-                tracing::info!("Broadcasting Tron transaction via gRPC (placeholder)");
-            }
-            TronTxMode::Auto => {
-                // TODO: Try JSON-RPC first, fallback to gRPC
-                tracing::info!("Broadcasting Tron transaction via auto-detect (placeholder)");
+        #[cfg(feature = "tron")]
+        {
+            let mut broadcaster = TronBroadcaster::new(
+                chain_id,
+                mode,
+                rpc_url.map(|s| s.to_string()),
+            );
+
+            match broadcaster.broadcast_transaction(tx_data, private_key).await {
+                Ok(hash) => Ok(Some(hash)),
+                Err(e) => {
+                    tracing::error!("Tron transaction broadcast failed: {}", e);
+                    Err(e.to_string())
+                }
             }
         }
 
-        // For now, generate a dummy transaction hash based on the input data
-        // In a real implementation, this would be the hash returned by the Tron network
-        let hash = alloy_primitives::keccak256(&tx_data);
-        Ok(Some(TxHash::from(hash)))
+        #[cfg(not(feature = "tron"))]
+        {
+            tracing::warn!("Tron support not enabled. Compile with --features tron");
+            // Fallback to placeholder behavior for compatibility
+            let hash = alloy_primitives::keccak256(&tx_data);
+            Ok(Some(TxHash::from(hash)))
+        }
     }
 
     /// Get Tron-specific chain configuration presets
@@ -511,6 +519,7 @@ mod tests {
             TRON_MAINNET_CHAIN_ID,
             TronTxMode::Auto,
             None,
+            None, // No private key for test
         ).await;
         assert!(result.is_ok());
         assert!(result.unwrap().is_some());
@@ -520,6 +529,7 @@ mod tests {
             tx_data,
             1u64, // Ethereum mainnet
             TronTxMode::Auto,
+            None,
             None,
         ).await;
         assert!(result.is_ok());
@@ -609,15 +619,19 @@ mod tests {
                 TRON_MAINNET_CHAIN_ID,
                 mode,
                 None,
+                None, // No private key for test
             ).await;
             
             assert!(result.is_ok(), "Mode {:?} should succeed", mode);
             let tx_hash = result.unwrap();
             assert!(tx_hash.is_some(), "Mode {:?} should return a hash", mode);
             
-            // Hash should be deterministic based on input data
-            let expected_hash = alloy_primitives::keccak256(&tx_data);
-            assert_eq!(tx_hash.unwrap(), TxHash::from(expected_hash));
+            // Hash should be deterministic based on input data (fallback behavior without tron feature)
+            #[cfg(not(feature = "tron"))]
+            {
+                let expected_hash = alloy_primitives::keccak256(&tx_data);
+                assert_eq!(tx_hash.unwrap(), TxHash::from(expected_hash));
+            }
         }
     }
 

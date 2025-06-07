@@ -1,0 +1,113 @@
+syntax = "proto3";
+
+package protocol;
+
+import "core/Tron.proto";
+import "google/protobuf/any.proto";
+
+// Wallet service for broadcasting transactions
+service Wallet {
+  // Broadcast a transaction
+  rpc BroadcastTransaction(Transaction) returns (Return);
+  
+  // Get latest block
+  rpc GetNowBlock(EmptyMessage) returns (Block);
+  
+  // Get block by number
+  rpc GetBlockByNum(NumberMessage) returns (Block);
+  
+  // Get account info
+  rpc GetAccount(Account) returns (Account);
+}
+
+// Return message for API calls
+message Return {
+  bool result = 1;
+  code code = 2;
+  string message = 3;
+  bytes txid = 4;
+  
+  enum code {
+    SUCCESS = 0;
+    SIGERROR = 1;
+    CONTRACT_VALIDATE_ERROR = 2;
+    CONTRACT_EXE_ERROR = 3;
+    BANDWITH_ERROR = 4;
+    DUP_TRANSACTION_ERROR = 5;
+    TAPOS_ERROR = 6;
+    TOO_BIG_TRANSACTION_ERROR = 7;
+    TRANSACTION_EXPIRATION_ERROR = 8;
+    SERVER_BUSY = 9;
+    NO_CONNECTION = 10;
+    NOT_ENOUGH_EFFECTIVE_CONNECTION = 11;
+    OTHER_ERROR = 20;
+  }
+}
+
+// Empty message for parameterless calls
+message EmptyMessage {}
+
+// Number message for block queries
+message NumberMessage {
+  int64 num = 1;
+}
+
+// Transaction info
+message TransactionInfo {
+  bytes id = 1;
+  int64 fee = 2;
+  int64 blockNumber = 3;
+  int64 blockTimeStamp = 4;
+  repeated bytes contractResult = 5;
+  string contract_address = 6;
+  ResourceReceipt receipt = 7;
+  repeated Log log = 8;
+  Transaction.Result result = 9;
+  string resMessage = 10;
+  string assetIssueID = 14;
+  int64 withdraw_amount = 15;
+  int64 unfreeze_amount = 16;
+  repeated InternalTransaction internal_transactions = 17;
+  int64 exchange_received_amount = 18;
+  int64 exchange_inject_another_amount = 19;
+  int64 exchange_withdraw_another_amount = 20;
+  int64 exchange_id = 21;
+  int64 shielded_transaction_fee = 22;
+  bytes orderId = 25;
+  repeated int64 orderDetails = 26;
+  int64 packingFee = 28;
+}
+
+// Resource receipt
+message ResourceReceipt {
+  int64 energy_usage = 1;
+  int64 energy_fee = 2;
+  int64 origin_energy_usage = 3;
+  int64 energy_usage_total = 4;
+  int64 net_usage = 5;
+  int64 net_fee = 6;
+  Transaction.Result result = 7;
+}
+
+// Log entry
+message Log {
+  bytes address = 1;
+  repeated bytes topics = 2;
+  bytes data = 3;
+}
+
+// Internal transaction
+message InternalTransaction {
+  bytes hash = 1;
+  bytes caller_address = 2;
+  bytes transferTo_address = 3;
+  repeated CallValueInfo callValueInfo = 4;
+  bytes note = 5;
+  bool rejected = 6;
+}
+
+// Call value info
+message CallValueInfo {
+  int64 callValue = 1;
+  string tokenId = 2;
+} 

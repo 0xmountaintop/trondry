@@ -7,7 +7,7 @@
 //! - Broadcasting via JSON-RPC or gRPC
 //! - Auto-fallback between broadcast methods
 
-use alloy_primitives::{Address, Bytes, TxHash, U256};
+use alloy_primitives::{Address, Bytes, TxHash, TxKind, U256};
 use eyre::{eyre, Result};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -17,6 +17,8 @@ use {
     sha2::{Digest, Sha256},
     k256::ecdsa::{SigningKey, Signature, signature::Signer},
     serde::Deserialize,
+    alloy_rlp::Decodable,
+    anvil_core::eth::transaction::TypedTransaction,
 };
 
 use super::{TronTxMode, is_tron_chain};
@@ -163,16 +165,82 @@ impl TronBroadcaster {
 
     #[cfg(feature = "tron")]
     fn parse_ethereum_transaction(&self, tx_data: &Bytes) -> Result<SimpleTransaction> {
-        // For now, create a minimal transaction structure
-        // In a real implementation, this would parse RLP-encoded transaction data
+        // Decode RLP-encoded transaction data
+        let mut slice = tx_data.as_ref();
+        let tx = TypedTransaction::decode(&mut slice)
+            .map_err(|e| eyre!("Failed to decode RLP transaction: {}", e))?;
+        
+        // Ensure no trailing data
+        if !slice.is_empty() {
+            return Err(eyre!("Unexpected trailing data after transaction"));
+        }
+        
+        // Check for unsupported transaction types
+        if matches!(tx, TypedTransaction::Deposit(_)) {
+            return Err(eyre!("Optimism deposit transactions are not supported on Tron"));
+        }
+        
+        // Recover sender address
+        let from = tx.recover()
+            .map_err(|e| eyre!("Failed to recover sender address: {}", e))?;
+        
+        // Extract transaction fields
+        let to = match tx.kind() {
+            TxKind::Call(addr) => Some(addr),
+            TxKind::Create => None, // Contract creation
+        };
+        
+        let value = tx.value();
+        let data = tx.data().clone();
+        let gas_limit = tx.gas_limit();
+        
+        // Calculate effective gas price with overflow protection
+        let gas_price = self.effective_gas_price(&tx)?;
+        
         Ok(SimpleTransaction {
-            from: Address::ZERO, // Will be set from signature
-            to: Some(Address::ZERO), // Will be parsed from tx data
-            value: U256::ZERO,
-            data: tx_data.clone(),
-            gas_limit: 50_000_000, // Default gas limit
-            gas_price: 420, // Default energy price
+            from,
+            to,
+            value,
+            data,
+            gas_limit,
+            gas_price,
         })
+    }
+
+    /// Calculate effective gas price for different transaction types
+    #[cfg(feature = "tron")]
+    fn effective_gas_price(&self, tx: &TypedTransaction) -> Result<u64> {
+        let price = match tx {
+            TypedTransaction::Legacy(tx) => tx.tx().gas_price,
+            TypedTransaction::EIP2930(tx) => tx.tx().gas_price,
+            TypedTransaction::EIP1559(tx) => {
+                // For EIP-1559, use max_fee_per_gas as the effective price
+                tx.tx().max_fee_per_gas
+            }
+            TypedTransaction::EIP4844(tx) => {
+                // For EIP-4844, use max_fee_per_gas as the effective price
+                tx.tx().tx().max_fee_per_gas
+            }
+            TypedTransaction::EIP7702(tx) => {
+                // For EIP-7702, use max_fee_per_gas as the effective price
+                tx.tx().max_fee_per_gas
+            }
+            TypedTransaction::Deposit(_) => {
+                // This should be caught earlier, but handle it gracefully
+                return Err(eyre!("Deposit transactions are not supported"));
+            }
+        };
+        
+        // Convert to u64 with saturation to prevent overflow
+        if price > u64::MAX as u128 {
+            tracing::warn!("Gas price {} exceeds u64::MAX, using fallback", price);
+            Ok(420) // Fallback to default energy price
+        } else if price == 0 {
+            // If gas price is 0, use default energy price for Tron
+            Ok(420)
+        } else {
+            Ok(price as u64)
+        }
     }
 
     #[cfg(feature = "tron")]
@@ -698,20 +766,289 @@ mod tests {
 
     #[cfg(feature = "tron")]
     #[test]
-    fn test_transaction_parsing() {
+    fn test_transaction_parsing_legacy() {
+        use alloy_consensus::{TxLegacy, Signed};
+        use alloy_primitives::{address, U256, Signature};
+        use alloy_rlp::Encodable;
+        
         let broadcaster = TronBroadcaster::new(
             TRON_MAINNET_CHAIN_ID,
             TronTxMode::Auto,
             None,
         );
         
-        let tx_data = Bytes::from(vec![0x01, 0x02, 0x03, 0x04]);
+        // Create a legacy transaction
+        let tx = TxLegacy {
+            chain_id: Some(1),
+            nonce: 42,
+            gas_price: 20_000_000_000u128, // 20 gwei
+            gas_limit: 21000,
+            to: alloy_primitives::TxKind::Call(address!("0x742d35Cc6634C0532925a3b8D4C9db96c4b4d8b6")),
+            value: U256::from(1000000000000000000u64), // 1 ETH
+            input: Default::default(),
+        };
+        
+        // Create a dummy signature (normally this would be a real signature)
+        let signature = Signature::from_scalars_and_parity(
+            alloy_primitives::B256::from([1u8; 32]),
+            alloy_primitives::B256::from([2u8; 32]),
+            false,
+        );
+        
+        let signed_tx = Signed::new_unchecked(tx, signature, alloy_primitives::TxHash::ZERO);
+        let typed_tx = anvil_core::eth::transaction::TypedTransaction::Legacy(signed_tx);
+        
+        // Encode the transaction
+        let mut encoded = Vec::new();
+        typed_tx.encode(&mut encoded);
+        let tx_data = Bytes::from(encoded);
+        
         let result = broadcaster.parse_ethereum_transaction(&tx_data);
         
         assert!(result.is_ok());
         let simple_tx = result.unwrap();
-        assert_eq!(simple_tx.gas_price, 420); // Default energy price
-        assert_eq!(simple_tx.gas_limit, 50_000_000); // Default gas limit
+        assert_eq!(simple_tx.gas_price, 20_000_000_000); // Should match the gas price
+        assert_eq!(simple_tx.gas_limit, 21000);
+        assert_eq!(simple_tx.value, U256::from(1000000000000000000u64));
+        assert_eq!(simple_tx.to, Some(address!("0x742d35Cc6634C0532925a3b8D4C9db96c4b4d8b6")));
+        assert!(simple_tx.data.is_empty());
+    }
+
+    #[cfg(feature = "tron")]
+    #[test]
+    fn test_transaction_parsing_eip1559() {
+        use alloy_consensus::{TxEip1559, Signed};
+        use alloy_primitives::{address, U256, Signature};
+        use alloy_rlp::Encodable;
+        
+        let broadcaster = TronBroadcaster::new(
+            TRON_MAINNET_CHAIN_ID,
+            TronTxMode::Auto,
+            None,
+        );
+        
+        // Create an EIP-1559 transaction
+        let tx = TxEip1559 {
+            chain_id: 1,
+            nonce: 42,
+            max_fee_per_gas: 30_000_000_000u128, // 30 gwei
+            max_priority_fee_per_gas: 2_000_000_000u128, // 2 gwei
+            gas_limit: 50000,
+            to: alloy_primitives::TxKind::Call(address!("0x742d35Cc6634C0532925a3b8D4C9db96c4b4d8b6")),
+            value: U256::from(500000000000000000u64), // 0.5 ETH
+            input: alloy_primitives::Bytes::from(vec![0xa9, 0x05, 0x9c, 0xbb]), // transfer function selector
+            access_list: Default::default(),
+        };
+        
+        // Create a dummy signature
+        let signature = Signature::from_scalars_and_parity(
+            alloy_primitives::B256::from([1u8; 32]),
+            alloy_primitives::B256::from([2u8; 32]),
+            false,
+        );
+        
+        let signed_tx = Signed::new_unchecked(tx, signature, alloy_primitives::TxHash::ZERO);
+        let typed_tx = anvil_core::eth::transaction::TypedTransaction::EIP1559(signed_tx);
+        
+        // Encode the transaction
+        let mut encoded = Vec::new();
+        typed_tx.encode(&mut encoded);
+        let tx_data = Bytes::from(encoded);
+        
+        let result = broadcaster.parse_ethereum_transaction(&tx_data);
+        
+        assert!(result.is_ok());
+        let simple_tx = result.unwrap();
+        assert_eq!(simple_tx.gas_price, 30_000_000_000); // Should use max_fee_per_gas
+        assert_eq!(simple_tx.gas_limit, 50000);
+        assert_eq!(simple_tx.value, U256::from(500000000000000000u64));
+        assert_eq!(simple_tx.to, Some(address!("0x742d35Cc6634C0532925a3b8D4C9db96c4b4d8b6")));
+        assert_eq!(simple_tx.data, alloy_primitives::Bytes::from(vec![0xa9, 0x05, 0x9c, 0xbb]));
+    }
+
+    #[cfg(feature = "tron")]
+    #[test]
+    fn test_transaction_parsing_contract_creation() {
+        use alloy_consensus::{TxLegacy, Signed};
+        use alloy_primitives::{U256, Signature};
+        use alloy_rlp::Encodable;
+        
+        let broadcaster = TronBroadcaster::new(
+            TRON_MAINNET_CHAIN_ID,
+            TronTxMode::Auto,
+            None,
+        );
+        
+        // Create a contract creation transaction
+        let tx = TxLegacy {
+            chain_id: Some(1),
+            nonce: 0,
+            gas_price: 20_000_000_000u128,
+            gas_limit: 2_000_000, // Higher gas limit for contract creation
+            to: alloy_primitives::TxKind::Create, // Contract creation
+            value: U256::ZERO,
+            input: alloy_primitives::Bytes::from(vec![0x60, 0x80, 0x60, 0x40]), // Contract bytecode
+        };
+        
+        let signature = Signature::from_scalars_and_parity(
+            alloy_primitives::B256::from([1u8; 32]),
+            alloy_primitives::B256::from([2u8; 32]),
+            false,
+        );
+        
+        let signed_tx = Signed::new_unchecked(tx, signature, alloy_primitives::TxHash::ZERO);
+        let typed_tx = anvil_core::eth::transaction::TypedTransaction::Legacy(signed_tx);
+        
+        // Encode the transaction
+        let mut encoded = Vec::new();
+        typed_tx.encode(&mut encoded);
+        let tx_data = Bytes::from(encoded);
+        
+        let result = broadcaster.parse_ethereum_transaction(&tx_data);
+        
+        assert!(result.is_ok());
+        let simple_tx = result.unwrap();
+        assert_eq!(simple_tx.to, None); // Contract creation should have None for to
+        assert_eq!(simple_tx.gas_limit, 2_000_000);
+        assert_eq!(simple_tx.data, alloy_primitives::Bytes::from(vec![0x60, 0x80, 0x60, 0x40]));
+    }
+
+    #[cfg(feature = "tron")]
+    #[test]
+    fn test_transaction_parsing_invalid_rlp() {
+        let broadcaster = TronBroadcaster::new(
+            TRON_MAINNET_CHAIN_ID,
+            TronTxMode::Auto,
+            None,
+        );
+        
+        // Invalid RLP data
+        let tx_data = Bytes::from(vec![0xff, 0xff, 0xff, 0xff]);
+        let result = broadcaster.parse_ethereum_transaction(&tx_data);
+        
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Failed to decode RLP transaction"));
+    }
+
+    #[cfg(feature = "tron")]
+    #[test]
+    fn test_transaction_parsing_trailing_data() {
+        use alloy_consensus::{TxLegacy, Signed};
+        use alloy_primitives::{address, U256, Signature};
+        use alloy_rlp::Encodable;
+        
+        let broadcaster = TronBroadcaster::new(
+            TRON_MAINNET_CHAIN_ID,
+            TronTxMode::Auto,
+            None,
+        );
+        
+        // Create a valid transaction
+        let tx = TxLegacy {
+            chain_id: Some(1),
+            nonce: 0,
+            gas_price: 20_000_000_000u128,
+            gas_limit: 21000,
+            to: alloy_primitives::TxKind::Call(address!("0x742d35Cc6634C0532925a3b8D4C9db96c4b4d8b6")),
+            value: U256::ZERO,
+            input: Default::default(),
+        };
+        
+        let signature = Signature::from_scalars_and_parity(
+            alloy_primitives::B256::from([1u8; 32]),
+            alloy_primitives::B256::from([2u8; 32]),
+            false,
+        );
+        
+        let signed_tx = Signed::new_unchecked(tx, signature, alloy_primitives::TxHash::ZERO);
+        let typed_tx = anvil_core::eth::transaction::TypedTransaction::Legacy(signed_tx);
+        
+        // Encode the transaction and add trailing data
+        let mut encoded = Vec::new();
+        typed_tx.encode(&mut encoded);
+        encoded.extend_from_slice(&[0xde, 0xad, 0xbe, 0xef]); // Add trailing data
+        let tx_data = Bytes::from(encoded);
+        
+        let result = broadcaster.parse_ethereum_transaction(&tx_data);
+        
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unexpected trailing data"));
+    }
+
+    #[cfg(feature = "tron")]
+    #[test]
+    fn test_effective_gas_price_zero_fallback() {
+        use alloy_consensus::{TxLegacy, Signed};
+        use alloy_primitives::{address, U256, Signature};
+        
+        let broadcaster = TronBroadcaster::new(
+            TRON_MAINNET_CHAIN_ID,
+            TronTxMode::Auto,
+            None,
+        );
+        
+        // Create a transaction with zero gas price
+        let tx = TxLegacy {
+            chain_id: Some(1),
+            nonce: 0,
+            gas_price: 0u128, // Zero gas price
+            gas_limit: 21000,
+            to: alloy_primitives::TxKind::Call(address!("0x742d35Cc6634C0532925a3b8D4C9db96c4b4d8b6")),
+            value: U256::ZERO,
+            input: Default::default(),
+        };
+        
+        let signature = Signature::from_scalars_and_parity(
+            alloy_primitives::B256::from([1u8; 32]),
+            alloy_primitives::B256::from([2u8; 32]),
+            false,
+        );
+        
+        let signed_tx = Signed::new_unchecked(tx, signature, alloy_primitives::TxHash::ZERO);
+        let typed_tx = anvil_core::eth::transaction::TypedTransaction::Legacy(signed_tx);
+        
+        let result = broadcaster.effective_gas_price(&typed_tx);
+        
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 420); // Should fallback to default energy price
+    }
+
+    #[cfg(feature = "tron")]
+    #[test]
+    fn test_effective_gas_price_overflow() {
+        use alloy_consensus::{TxLegacy, Signed};
+        use alloy_primitives::{address, U256, Signature};
+        
+        let broadcaster = TronBroadcaster::new(
+            TRON_MAINNET_CHAIN_ID,
+            TronTxMode::Auto,
+            None,
+        );
+        
+        // Create a transaction with very high gas price (exceeds u64::MAX)
+        let tx = TxLegacy {
+            chain_id: Some(1),
+            nonce: 0,
+            gas_price: u128::MAX, // Maximum u128 value
+            gas_limit: 21000,
+            to: alloy_primitives::TxKind::Call(address!("0x742d35Cc6634C0532925a3b8D4C9db96c4b4d8b6")),
+            value: U256::ZERO,
+            input: Default::default(),
+        };
+        
+        let signature = Signature::from_scalars_and_parity(
+            alloy_primitives::B256::from([1u8; 32]),
+            alloy_primitives::B256::from([2u8; 32]),
+            false,
+        );
+        
+        let signed_tx = Signed::new_unchecked(tx, signature, alloy_primitives::TxHash::ZERO);
+        let typed_tx = anvil_core::eth::transaction::TypedTransaction::Legacy(signed_tx);
+        
+        let result = broadcaster.effective_gas_price(&typed_tx);
+        
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), 420); // Should fallback to default energy price due to overflow
     }
 
     #[cfg(feature = "tron")]

@@ -161,6 +161,19 @@ alwaysApply: false
   - ✅ Added tokio-test dependency for synchronous async testing
   - ✅ Graceful error handling for individual transaction conversion failures
 
+- [X] 4B.12: Implement real `parse_ethereum_transaction` (replace stub with proper RLP decoding)
+  - ✅ Added proper RLP decoding using Foundry's `TypedTransaction`
+  - ✅ Implemented sender address recovery from transaction signature
+  - ✅ Added support for all Ethereum transaction types (Legacy, EIP-2930, EIP-1559, EIP-4844, EIP-7702)
+  - ✅ Implemented effective gas price calculation for different transaction types
+  - ✅ Added proper error handling for invalid RLP, trailing data, and unsupported transaction types
+  - ✅ Added overflow protection for gas price conversion (u128 → u64)
+  - ✅ Implemented contract creation detection (TxKind::Create → to=None)
+  - ✅ Added comprehensive unit tests covering all transaction types and edge cases
+  - ✅ All 22 broadcaster tests passing (21 passed, 1 ignored for network access)
+  - ✅ Zero-gas-price fallback to default energy price (420 Sun)
+  - ✅ Proper handling of EIP-1559 max_fee_per_gas vs gas_price
+
 **Next Steps:**
 - Task 8: Release Plan & Stabilization (feature gate, community feedback)
 
@@ -211,4 +224,16 @@ alwaysApply: false
 - **Protobuf Integration**: Proper conversion to Tron protobuf Transaction format with contract parameters
 - **Testing**: Added tokio-test 0.4 for synchronous async testing in unit tests
 - **API Design**: Backward compatible - existing `get_latest_block_jsonrpc` calls new method with `include_txs=false`
+
+### Real Transaction Parsing Implementation (4B.12)
+- **RLP Decoding**: Used Foundry's existing `TypedTransaction` with `alloy_rlp::Decodable` for robust parsing
+- **Import Path**: `anvil_core::eth::transaction::TypedTransaction` is the correct import for Anvil crate
+- **Signature Recovery**: `tx.recover()` method handles ECDSA signature recovery automatically
+- **Transaction Types**: Comprehensive support for Legacy, EIP-2930, EIP-1559, EIP-4844, EIP-7702 transactions
+- **Gas Price Mapping**: Different transaction types require different gas price extraction (gas_price vs max_fee_per_gas)
+- **Overflow Protection**: Gas prices can exceed u64::MAX, need saturation conversion with fallback to default (420)
+- **Contract Detection**: Use `tx.kind()` to distinguish between `TxKind::Call(addr)` and `TxKind::Create`
+- **Error Handling**: Validate RLP completeness (no trailing data), reject unsupported Optimism deposit transactions
+- **Testing Strategy**: Create real signed transactions using `alloy_consensus` types for comprehensive test coverage
+- **Signature Creation**: `Signature::from_scalars_and_parity()` doesn't return Result, no `.unwrap()` needed
 

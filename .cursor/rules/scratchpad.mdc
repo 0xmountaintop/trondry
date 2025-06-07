@@ -51,6 +51,7 @@ alwaysApply: false
 - E2E tests created for TRC-20 deployment, contract interaction, and energy handling
 
 **Next Priority:**
+- Task 4B: Implement real Tron broadcaster (replace placeholder `broadcast_transaction`)
 - Task 8: Release Plan & Stabilization (feature gate, community feedback)
 
 ### TODO
@@ -97,6 +98,20 @@ alwaysApply: false
 [ ] 8. Release Plan & Stabilization
     [ ] 8.1 Feature gate (`--experimental-tron`).
     [ ] 8.2 Solicit community feedback.
+
+# New Work-Package: 4B – Real Tron Broadcaster Implementation
+[ ] 4B. Implement real Tron broadcaster (`broadcast_transaction`)
+    [ ] 4B.1 Protobuf & gRPC foundation (WB-1)
+    [ ] 4B.2 RLP-to-Tron conversion (TxBuilder) (WB-2)
+    [ ] 4B.3 Signing layer (TronSigner) (WB-3)
+    [ ] 4B.4 Broadcasting back-ends
+        [ ] 4B.4.a JSON-RPC path
+        [ ] 4B.4.b gRPC path
+    [ ] 4B.5 Auto-fallback logic (WB-5)
+    [ ] 4B.6 Error handling & telemetry (WB-6)
+    [ ] 4B.7 Feature flag & config plumb-through (WB-7)
+    [ ] 4B.8 Tests & CI (WB-8)
+    [ ] 4B.9 Documentation update (WB-9)
 
 ---
 

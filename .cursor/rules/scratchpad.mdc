@@ -150,6 +150,17 @@ alwaysApply: false
   - ✅ Fixed failing broadcast transaction tests (network dependency handling)
   - ✅ All 34 Tron tests passing (33 passed, 1 ignored for network access)
 
+- [X] 4B.11: Enhanced `get_latest_block_jsonrpc` with transaction support
+  - ✅ Extended EthBlock struct to include transactions field
+  - ✅ Created EthTransaction struct for JSON-RPC transaction deserialization
+  - ✅ Added `get_latest_block_jsonrpc_with_txs` method with include_txs parameter
+  - ✅ Implemented `convert_eth_transaction_to_tron` for transaction conversion
+  - ✅ Added support for both TRX transfers and smart contract calls
+  - ✅ Added public `get_latest_block_with_transactions` API method
+  - ✅ Comprehensive test suite with 16 broadcaster tests (15 passed, 1 ignored)
+  - ✅ Added tokio-test dependency for synchronous async testing
+  - ✅ Graceful error handling for individual transaction conversion failures
+
 **Next Steps:**
 - Task 8: Release Plan & Stabilization (feature gate, community feedback)
 
@@ -190,4 +201,14 @@ alwaysApply: false
 - **Error Handling**: Comprehensive error handling for HTTP, JSON parsing, and RPC errors
 - **Testing Strategy**: Used mockito for unit tests, separate integration tests for live network
 - **Dependencies**: Added mockito 1.4 as dev dependency for HTTP mocking in tests
+
+### Enhanced Transaction Support (4B.11)
+- **Transaction Parsing**: Extended `EthBlock` to include optional `Vec<EthTransaction>` field
+- **Transaction Conversion**: Implemented Ethereum→Tron transaction conversion with proper contract type detection
+- **Contract Types**: Differentiated between TRX transfers (empty input) and smart contract calls (non-empty input)
+- **Parameter Handling**: Used `include_txs` parameter to control JSON-RPC request (`"params": ["latest", true/false]`)
+- **Error Resilience**: Individual transaction conversion failures don't break entire block parsing
+- **Protobuf Integration**: Proper conversion to Tron protobuf Transaction format with contract parameters
+- **Testing**: Added tokio-test 0.4 for synchronous async testing in unit tests
+- **API Design**: Backward compatible - existing `get_latest_block_jsonrpc` calls new method with `include_txs=false`
 

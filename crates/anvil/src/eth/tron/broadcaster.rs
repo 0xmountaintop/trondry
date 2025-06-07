@@ -35,6 +35,22 @@ struct EthBlock {
     #[serde(rename = "transactionsRoot")]
     transactions_root: Option<String>,
     miner: Option<String>,
+    transactions: Option<Vec<EthTransaction>>,
+}
+
+/// JSON-RPC transaction structure for deserializing Ethereum-compatible transaction data
+#[cfg(feature = "tron")]
+#[derive(Debug, Deserialize)]
+struct EthTransaction {
+    hash: String,
+    from: String,
+    to: Option<String>,
+    value: String,
+    input: String,
+    gas: String,
+    #[serde(rename = "gasPrice")]
+    gas_price: String,
+    nonce: String,
 }
 
 /// Simple transaction structure for internal use
@@ -78,6 +94,26 @@ impl TronBroadcaster {
     pub async fn init_grpc(&mut self, grpc_url: &str) -> Result<()> {
         self.grpc_client = Some(proto::protocol::WalletClient::new(grpc_url.to_string()));
         Ok(())
+    }
+
+    /// Get the latest block with optional transaction inclusion
+    pub async fn get_latest_block_with_transactions(
+        &mut self,
+        include_transactions: bool,
+    ) -> Result<proto::protocol::Block> {
+        // Try gRPC first if available
+        if let Some(client) = &mut self.grpc_client {
+            let response = client.get_now_block().await
+                .map_err(|e| eyre!("gRPC get_now_block failed: {}", e))?;
+            return Ok(response);
+        }
+
+        // Fallback to JSON-RPC
+        if let Some(rpc_url) = &self.rpc_url {
+            return self.get_latest_block_jsonrpc_with_txs(rpc_url, include_transactions).await;
+        }
+
+        Err(eyre!("No RPC endpoint available"))
     }
 
     /// Broadcast a transaction to the Tron network
@@ -293,11 +329,16 @@ impl TronBroadcaster {
 
     #[cfg(feature = "tron")]
     async fn get_latest_block_jsonrpc(&self, rpc_url: &str) -> Result<proto::protocol::Block> {
+        self.get_latest_block_jsonrpc_with_txs(rpc_url, false).await
+    }
+
+    #[cfg(feature = "tron")]
+    async fn get_latest_block_jsonrpc_with_txs(&self, rpc_url: &str, include_txs: bool) -> Result<proto::protocol::Block> {
         // Create JSON-RPC request for latest block
         let request = serde_json::json!({
             "jsonrpc": "2.0",
             "method": "eth_getBlockByNumber",
-            "params": ["latest", false], // false = don't include full transaction objects
+            "params": ["latest", include_txs], // include_txs = whether to include full transaction objects
             "id": 1
         });
 
@@ -393,6 +434,26 @@ impl TronBroadcaster {
             vec![]
         };
 
+        // Convert transactions if included
+        let transactions = if include_txs && eth_block.transactions.is_some() {
+            let eth_transactions = eth_block.transactions.unwrap();
+            let mut tron_transactions = Vec::new();
+            
+            for eth_tx in eth_transactions {
+                match self.convert_eth_transaction_to_tron(&eth_tx, block_number, &parent_hash, timestamp).await {
+                    Ok(tron_tx) => tron_transactions.push(tron_tx),
+                    Err(e) => {
+                        tracing::warn!("Failed to convert transaction {}: {}", eth_tx.hash, e);
+                        // Continue with other transactions instead of failing the entire block
+                    }
+                }
+            }
+            
+            tron_transactions
+        } else {
+            vec![] // No transactions requested or available
+        };
+
         // Create the block header
         let block_header = proto::protocol::BlockHeader {
             raw_data: Some(proto::protocol::block_header::Raw {
@@ -409,8 +470,127 @@ impl TronBroadcaster {
         };
 
         Ok(proto::protocol::Block {
-            transactions: vec![], // We requested without full transaction objects
+            transactions,
             block_header: Some(block_header),
+        })
+    }
+
+    #[cfg(feature = "tron")]
+    async fn convert_eth_transaction_to_tron(
+        &self,
+        eth_tx: &EthTransaction,
+        block_number: u64,
+        parent_hash: &[u8],
+        timestamp: i64,
+    ) -> Result<proto::protocol::Transaction> {
+        // Parse transaction fields
+        let from_hex = eth_tx.from.trim_start_matches("0x");
+        let from_address = hex::decode(from_hex)
+            .map_err(|e| eyre!("Invalid from address: {}", e))?;
+
+        let to_address = if let Some(to) = &eth_tx.to {
+            let to_hex = to.trim_start_matches("0x");
+            hex::decode(to_hex)
+                .map_err(|e| eyre!("Invalid to address: {}", e))?
+        } else {
+            vec![] // Contract creation
+        };
+
+        let value = u64::from_str_radix(
+            eth_tx.value.trim_start_matches("0x"),
+            16
+        ).map_err(|e| eyre!("Invalid value: {}", e))? as i64;
+
+        let input_data = if eth_tx.input != "0x" {
+            hex::decode(eth_tx.input.trim_start_matches("0x"))
+                .map_err(|e| eyre!("Invalid input data: {}", e))?
+        } else {
+            vec![]
+        };
+
+        let gas_limit = u64::from_str_radix(
+            eth_tx.gas.trim_start_matches("0x"),
+            16
+        ).map_err(|e| eyre!("Invalid gas: {}", e))? as i64;
+
+        // Create ref_block_bytes (last 2 bytes of block number)
+        let ref_block_bytes = (block_number as u16).to_be_bytes().to_vec();
+        
+        // Create ref_block_hash (first 8 bytes of parent hash)
+        let ref_block_hash = if parent_hash.len() >= 8 {
+            parent_hash[0..8].to_vec()
+        } else {
+            vec![0u8; 8]
+        };
+
+        // Set expiration (current time + 1 hour)
+        let expiration = timestamp + 3600000; // 1 hour from block timestamp
+
+        // Create contract based on transaction type
+        let contract = if input_data.is_empty() && !to_address.is_empty() {
+            // Simple TRX transfer
+            let transfer_contract = proto::protocol::TransferContract {
+                owner_address: from_address.clone(),
+                to_address: to_address.clone(),
+                amount: value,
+            };
+
+            let parameter = prost_types::Any {
+                type_url: "type.googleapis.com/protocol.TransferContract".to_string(),
+                value: transfer_contract.encode_to_vec(),
+            };
+
+            proto::protocol::transaction::Contract {
+                r#type: proto::protocol::transaction::contract::ContractType::TransferContract as i32,
+                parameter: Some(parameter),
+                provider: vec![],
+                contract_name: vec![],
+                permission_id: 0,
+            }
+        } else {
+            // Smart contract interaction
+            let trigger_contract = proto::protocol::TriggerSmartContract {
+                owner_address: from_address.clone(),
+                contract_address: to_address.clone(),
+                call_value: value,
+                data: input_data,
+                call_token_value: 0,
+                token_id: 0,
+            };
+
+            let parameter = prost_types::Any {
+                type_url: "type.googleapis.com/protocol.TriggerSmartContract".to_string(),
+                value: trigger_contract.encode_to_vec(),
+            };
+
+            proto::protocol::transaction::Contract {
+                r#type: proto::protocol::transaction::contract::ContractType::TriggerSmartContract as i32,
+                parameter: Some(parameter),
+                provider: vec![],
+                contract_name: vec![],
+                permission_id: 0,
+            }
+        };
+
+        // Create raw transaction
+        let raw_data = proto::protocol::transaction::Raw {
+            ref_block_bytes,
+            ref_block_num: block_number as i64,
+            ref_block_hash,
+            expiration,
+            auths: vec![],
+            data: vec![],
+            contract: vec![contract],
+            scripts: vec![],
+            timestamp,
+            fee_limit: gas_limit,
+        };
+
+        // Create transaction (without signature since we're parsing existing transactions)
+        Ok(proto::protocol::Transaction {
+            raw_data: Some(raw_data),
+            signature: vec![], // Existing transactions don't need re-signing
+            ret: vec![], // Transaction results would be filled by the network
         })
     }
 
@@ -754,5 +934,224 @@ mod tests {
         assert!(result.unwrap_err().to_string().contains("RPC returned null block"));
         
         mock.assert_async().await;
+    }
+
+    #[cfg(feature = "tron")]
+    #[test]
+    fn test_eth_transaction_deserialization() {
+        let json_data = serde_json::json!({
+            "hash": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+            "from": "0x41a1b2c3d4e5f6789012345678901234567890ab",
+            "to": "0x41b2c3d4e5f6789012345678901234567890abcd",
+            "value": "0xde0b6b3a7640000",
+            "input": "0xa9059cbb000000000000000000000000b2c3d4e5f6789012345678901234567890abcdef0000000000000000000000000000000000000000000000000de0b6b3a7640000",
+            "gas": "0x5208",
+            "gasPrice": "0x1a4",
+            "nonce": "0x0"
+        });
+
+        let eth_tx: EthTransaction = serde_json::from_value(json_data).unwrap();
+        
+        assert_eq!(eth_tx.hash, "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef");
+        assert_eq!(eth_tx.from, "0x41a1b2c3d4e5f6789012345678901234567890ab");
+        assert_eq!(eth_tx.to, Some("0x41b2c3d4e5f6789012345678901234567890abcd".to_string()));
+        assert_eq!(eth_tx.value, "0xde0b6b3a7640000");
+        assert_eq!(eth_tx.gas, "0x5208");
+        assert_eq!(eth_tx.gas_price, "0x1a4");
+        assert_eq!(eth_tx.nonce, "0x0");
+    }
+
+    #[cfg(feature = "tron")]
+    #[tokio::test]
+    async fn test_get_latest_block_with_transactions_mock() {
+        use mockito::Server;
+        
+        let mut server = Server::new_async().await;
+        let mock = server.mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "number": "0xf4240",
+                    "timestamp": "0x5f5e100",
+                    "parentHash": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+                    "transactionsRoot": "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+                    "miner": "0x41a1b2c3d4e5f6789012345678901234567890ab",
+                    "transactions": [
+                        {
+                            "hash": "0x1111111111111111111111111111111111111111111111111111111111111111",
+                            "from": "0x41a1b2c3d4e5f6789012345678901234567890ab",
+                            "to": "0x41b2c3d4e5f6789012345678901234567890abcd",
+                            "value": "0xde0b6b3a7640000",
+                            "input": "0x",
+                            "gas": "0x5208",
+                            "gasPrice": "0x1a4",
+                            "nonce": "0x0"
+                        },
+                        {
+                            "hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+                            "from": "0x41c3d4e5f6789012345678901234567890abcdef",
+                            "to": "0x41d4e5f6789012345678901234567890abcdef01",
+                            "value": "0x0",
+                            "input": "0xa9059cbb000000000000000000000000b2c3d4e5f6789012345678901234567890abcdef0000000000000000000000000000000000000000000000000de0b6b3a7640000",
+                            "gas": "0xc350",
+                            "gasPrice": "0x1a4",
+                            "nonce": "0x1"
+                        }
+                    ]
+                }
+            }"#)
+            .create_async()
+            .await;
+
+        let mut broadcaster = TronBroadcaster::new(
+            TRON_MAINNET_CHAIN_ID,
+            TronTxMode::JsonRpc,
+            Some(server.url()),
+        );
+
+        let result = broadcaster.get_latest_block_with_transactions(true).await;
+        assert!(result.is_ok());
+
+        let block = result.unwrap();
+        assert!(block.block_header.is_some());
+        
+        // Check that transactions were parsed
+        assert_eq!(block.transactions.len(), 2);
+        
+        // Check first transaction (TRX transfer)
+        let tx1 = &block.transactions[0];
+        assert!(tx1.raw_data.is_some());
+        let raw1 = tx1.raw_data.as_ref().unwrap();
+        assert_eq!(raw1.contract.len(), 1);
+        assert_eq!(raw1.contract[0].r#type, proto::protocol::transaction::contract::ContractType::TransferContract as i32);
+        
+        // Check second transaction (smart contract call)
+        let tx2 = &block.transactions[1];
+        assert!(tx2.raw_data.is_some());
+        let raw2 = tx2.raw_data.as_ref().unwrap();
+        assert_eq!(raw2.contract.len(), 1);
+        assert_eq!(raw2.contract[0].r#type, proto::protocol::transaction::contract::ContractType::TriggerSmartContract as i32);
+        
+        mock.assert_async().await;
+    }
+
+    #[cfg(feature = "tron")]
+    #[tokio::test]
+    async fn test_get_latest_block_without_transactions() {
+        use mockito::Server;
+        
+        let mut server = Server::new_async().await;
+        let mock = server.mock("POST", "/")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(r#"{
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {
+                    "number": "0xf4240",
+                    "timestamp": "0x5f5e100",
+                    "parentHash": "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+                    "transactionsRoot": "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+                    "miner": "0x41a1b2c3d4e5f6789012345678901234567890ab"
+                }
+            }"#)
+            .create_async()
+            .await;
+
+        let mut broadcaster = TronBroadcaster::new(
+            TRON_MAINNET_CHAIN_ID,
+            TronTxMode::JsonRpc,
+            Some(server.url()),
+        );
+
+        let result = broadcaster.get_latest_block_with_transactions(false).await;
+        assert!(result.is_ok());
+
+        let block = result.unwrap();
+        assert!(block.block_header.is_some());
+        
+        // Should have no transactions when not requested
+        assert_eq!(block.transactions.len(), 0);
+        
+        mock.assert_async().await;
+    }
+
+    #[cfg(feature = "tron")]
+    #[test]
+    fn test_convert_eth_transaction_to_tron_transfer() {
+        let broadcaster = TronBroadcaster::new(
+            TRON_MAINNET_CHAIN_ID,
+            TronTxMode::Auto,
+            None,
+        );
+        
+        let eth_tx = EthTransaction {
+            hash: "0x1111111111111111111111111111111111111111111111111111111111111111".to_string(),
+            from: "0x41a1b2c3d4e5f6789012345678901234567890ab".to_string(),
+            to: Some("0x41b2c3d4e5f6789012345678901234567890abcd".to_string()),
+            value: "0xde0b6b3a7640000".to_string(), // 1 ETH in wei
+            input: "0x".to_string(), // Empty input = transfer
+            gas: "0x5208".to_string(),
+            gas_price: "0x1a4".to_string(),
+            nonce: "0x0".to_string(),
+        };
+        
+        let parent_hash = vec![0x12u8; 32];
+        let block_number = 1000000;
+        let timestamp = 1600000000000i64;
+        
+        let result = tokio_test::block_on(
+            broadcaster.convert_eth_transaction_to_tron(&eth_tx, block_number, &parent_hash, timestamp)
+        );
+        
+        assert!(result.is_ok());
+        let tron_tx = result.unwrap();
+        
+        assert!(tron_tx.raw_data.is_some());
+        let raw_data = tron_tx.raw_data.unwrap();
+        assert_eq!(raw_data.contract.len(), 1);
+        assert_eq!(raw_data.contract[0].r#type, proto::protocol::transaction::contract::ContractType::TransferContract as i32);
+        assert_eq!(raw_data.fee_limit, 21000); // 0x5208
+    }
+
+    #[cfg(feature = "tron")]
+    #[test]
+    fn test_convert_eth_transaction_to_tron_contract_call() {
+        let broadcaster = TronBroadcaster::new(
+            TRON_MAINNET_CHAIN_ID,
+            TronTxMode::Auto,
+            None,
+        );
+        
+        let eth_tx = EthTransaction {
+            hash: "0x2222222222222222222222222222222222222222222222222222222222222222".to_string(),
+            from: "0x41c3d4e5f6789012345678901234567890abcdef".to_string(),
+            to: Some("0x41d4e5f6789012345678901234567890abcdef01".to_string()),
+            value: "0x0".to_string(),
+            input: "0xa9059cbb000000000000000000000000b2c3d4e5f6789012345678901234567890abcdef0000000000000000000000000000000000000000000000000de0b6b3a7640000".to_string(),
+            gas: "0xc350".to_string(), // 50000
+            gas_price: "0x1a4".to_string(),
+            nonce: "0x1".to_string(),
+        };
+        
+        let parent_hash = vec![0x34u8; 32];
+        let block_number = 1000001;
+        let timestamp = 1600000001000i64;
+        
+        let result = tokio_test::block_on(
+            broadcaster.convert_eth_transaction_to_tron(&eth_tx, block_number, &parent_hash, timestamp)
+        );
+        
+        assert!(result.is_ok());
+        let tron_tx = result.unwrap();
+        
+        assert!(tron_tx.raw_data.is_some());
+        let raw_data = tron_tx.raw_data.unwrap();
+        assert_eq!(raw_data.contract.len(), 1);
+        assert_eq!(raw_data.contract[0].r#type, proto::protocol::transaction::contract::ContractType::TriggerSmartContract as i32);
+        assert_eq!(raw_data.fee_limit, 50000); // 0xc350
     }
 } 
